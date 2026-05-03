@@ -1,0 +1,56 @@
+# Binaries
+/bin/
+/dist/
+*.exe
+*.dll
+*.so
+*.dylib
+/sentilyzerd
+
+# Go
+*.test
+*.out
+/vendor/
+go.work
+go.work.sum
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ML artifacts
+ml/models/cache/
+*.onnx
+*.pt
+*.bin
+
+# Generated proto stubs are committed so `git clone && go build` works without
+# requiring contributors to install protoc. Regenerate with `make proto`.
+# (Intentionally not ignored.)
+
+# Editor
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Local data
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Coverage
+coverage.out
+htmlcov/
+.coverage

@@ -1,0 +1,369 @@
+// Package service contains the protocol-agnostic business logic. The REST,
+// XML, gRPC, and GraphQL handlers are all thin adapters over this surface.
+package service
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/chijiokekechi/sentilyzer/api/internal/cache"
+	"github.com/chijiokekechi/sentilyzer/api/internal/connectors"
+	"github.com/chijiokekechi/sentilyzer/api/internal/domain"
+	"github.com/chijiokekechi/sentilyzer/api/internal/inference"
+	"github.com/chijiokekechi/sentilyzer/api/internal/store"
+)
+
+// Service is the central business logic component.
+type Service struct {
+	Inference  inference.Client
+	Connectors *connectors.Registry
+	Cache      *cache.TTLCache[string, *domain.SourcedAnalysis]
+	Store      *store.Store // optional; nil disables persistence
+	Now        func() time.Time
+}
+
+// New builds a Service. The cache is created with the provided TTL.
+func New(
+	inf inference.Client,
+	reg *connectors.Registry,
+	st *store.Store,
+	cacheTTL time.Duration,
+) (*Service, error) {
+	if inf == nil {
+		return nil, errors.New("service: inference client required")
+	}
+	if reg == nil {
+		return nil, errors.New("service: connector registry required")
+	}
+	c, err := cache.New[string, *domain.SourcedAnalysis](512, cacheTTL)
+	if err != nil {
+		return nil, err
+	}
+	return &Service{
+		Inference:  inf,
+		Connectors: reg,
+		Cache:      c,
+		Store:      st,
+		Now:        time.Now,
+	}, nil
+}
+
+// AnalyzeTextRequest captures inline-document analysis parameters.
+type AnalyzeTextRequest struct {
+	Documents      []domain.Document
+	IncludeAspects bool
+}
+
+// AnalyzeTextResponse is the result of analyzing a batch of inline docs.
+type AnalyzeTextResponse struct {
+	Results   []domain.DocumentResult
+	Aggregate domain.Aggregate
+}
+
+func (s *Service) AnalyzeText(ctx context.Context, req AnalyzeTextRequest) (*AnalyzeTextResponse, error) {
+	if len(req.Documents) == 0 {
+		return &AnalyzeTextResponse{Aggregate: domain.NewAggregator().Aggregate()}, nil
+	}
+	texts := make([]string, len(req.Documents))
+	for i, d := range req.Documents {
+		texts[i] = d.Text
+	}
+	scores, err := s.Inference.Classify(ctx, texts)
+	if err != nil {
+		return nil, fmt.Errorf("classify: %w", err)
+	}
+	if len(scores) != len(req.Documents) {
+		return nil, fmt.Errorf("inference returned %d scores for %d documents", len(scores), len(req.Documents))
+	}
+
+	var aspectsByDoc [][]domain.AspectScore
+	if req.IncludeAspects {
+		aspectInputs := make([]inference.AspectInput, 0, len(req.Documents))
+		positions := make([]int, 0, len(req.Documents))
+		for i, d := range req.Documents {
+			if len(d.Aspects) == 0 {
+				continue
+			}
+			aspectInputs = append(aspectInputs, inference.AspectInput{Text: d.Text, Aspects: d.Aspects})
+			positions = append(positions, i)
+		}
+		if len(aspectInputs) > 0 {
+			batch, err := s.Inference.ClassifyAspects(ctx, aspectInputs)
+			if err != nil {
+				return nil, fmt.Errorf("classify aspects: %w", err)
+			}
+			aspectsByDoc = make([][]domain.AspectScore, len(req.Documents))
+			for offset, pos := range positions {
+				if offset < len(batch) {
+					aspectsByDoc[pos] = batch[offset]
+				}
+			}
+		}
+	}
+
+	now := s.Now().UTC()
+	results := make([]domain.DocumentResult, len(req.Documents))
+	agg := domain.NewAggregator()
+	for i, d := range req.Documents {
+		var aspects []domain.AspectScore
+		if i < len(aspectsByDoc) {
+			aspects = aspectsByDoc[i]
+		}
+		results[i] = domain.DocumentResult{
+			ID:         d.ID,
+			Overall:    scores[i],
+			Aspects:    aspects,
+			AnalyzedAt: now,
+		}
+		agg.Add(scores[i])
+	}
+	return &AnalyzeTextResponse{Results: results, Aggregate: agg.Aggregate()}, nil
+}
+
+// AnalyzeTopicRequest mirrors the proto message but stays in domain types.
+type AnalyzeTopicRequest struct {
+	Topic            string
+	Platforms        []string
+	LimitPerPlatform int
+	Aspects          []string
+	Language         string
+	SinceSeconds     int64
+}
+
+// AnalyzeTopic gathers posts and runs analysis.
+func (s *Service) AnalyzeTopic(ctx context.Context, req AnalyzeTopicRequest) (*domain.SourcedAnalysis, error) {
+	if strings.TrimSpace(req.Topic) == "" {
+		return nil, errors.New("topic is required")
+	}
+	if req.LimitPerPlatform <= 0 {
+		req.LimitPerPlatform = 20
+	}
+
+	cacheKey := buildCacheKey(req)
+	if hit, ok := s.Cache.Get(cacheKey); ok {
+		return hit, nil
+	}
+
+	platforms := s.selectPlatforms(req.Platforms)
+	if len(platforms) == 0 {
+		return nil, errors.New("no platforms enabled — set credentials or SENTILYZER_USE_MOCK=true")
+	}
+
+	docs, err := s.fanout(ctx, platforms, req)
+	if err != nil {
+		return nil, err
+	}
+	if len(docs) == 0 {
+		return &domain.SourcedAnalysis{
+			Topic:      req.Topic,
+			ByPlatform: map[string]domain.Aggregate{},
+			ByAspect:   map[string]domain.Aggregate{},
+		}, nil
+	}
+
+	docs = dedupeByID(docs)
+	texts := make([]string, len(docs))
+	for i, d := range docs {
+		texts[i] = d.Document.Text
+	}
+
+	scores, err := s.Inference.Classify(ctx, texts)
+	if err != nil {
+		return nil, fmt.Errorf("classify: %w", err)
+	}
+
+	aspectsByDoc := make([][]domain.AspectScore, len(docs))
+	if len(req.Aspects) > 0 {
+		inputs := make([]inference.AspectInput, len(docs))
+		for i, d := range docs {
+			inputs[i] = inference.AspectInput{Text: d.Document.Text, Aspects: req.Aspects}
+		}
+		batch, err := s.Inference.ClassifyAspects(ctx, inputs)
+		if err != nil {
+			return nil, fmt.Errorf("classify aspects: %w", err)
+		}
+		for i := range batch {
+			aspectsByDoc[i] = batch[i]
+		}
+	}
+
+	now := s.Now().UTC()
+	results := make([]domain.SourcedDocumentResult, len(docs))
+	overall := domain.NewAggregator()
+	byPlatform := map[string]*domain.Aggregator{}
+	byAspect := map[string]*domain.Aggregator{}
+
+	for i, d := range docs {
+		dr := domain.DocumentResult{
+			ID:         d.Document.ID,
+			Overall:    scores[i],
+			Aspects:    aspectsByDoc[i],
+			AnalyzedAt: now,
+		}
+		results[i] = domain.SourcedDocumentResult{Document: d, Result: dr}
+		overall.Add(scores[i])
+		if _, ok := byPlatform[d.Platform]; !ok {
+			byPlatform[d.Platform] = domain.NewAggregator()
+		}
+		byPlatform[d.Platform].Add(scores[i])
+		for _, asp := range aspectsByDoc[i] {
+			if _, ok := byAspect[asp.Aspect]; !ok {
+				byAspect[asp.Aspect] = domain.NewAggregator()
+			}
+			byAspect[asp.Aspect].Add(asp.Score)
+		}
+	}
+
+	out := &domain.SourcedAnalysis{
+		Topic:      req.Topic,
+		Results:    results,
+		Aggregate:  overall.Aggregate(),
+		ByPlatform: aggregateMap(byPlatform),
+		ByAspect:   aggregateMap(byAspect),
+	}
+
+	s.Cache.Set(cacheKey, out)
+	if s.Store != nil {
+		if err := s.Store.SaveTopicResults(ctx, req.Topic, results); err != nil {
+			// persistence is best-effort — don't fail the request
+			fmt.Printf("warning: persistence failed: %v\n", err)
+		}
+	}
+	return out, nil
+}
+
+func (s *Service) ListPlatforms() []domain.PlatformInfo {
+	return domain.SortPlatforms(s.Connectors.Info())
+}
+
+func (s *Service) Health(ctx context.Context) (*domain.HealthInfo, error) {
+	info := &domain.HealthInfo{Healthy: true}
+	if r, err := s.Inference.Ready(ctx); err == nil && r.Ready {
+		info.MLReachable = true
+	}
+	return info, nil
+}
+
+// --- helpers -----------------------------------------------------------------
+
+func (s *Service) selectPlatforms(want []string) []connectors.Connector {
+	all := s.Connectors.List()
+	if len(want) == 0 {
+		// Use every enabled connector.
+		out := make([]connectors.Connector, 0, len(all))
+		for _, c := range all {
+			if ok, _ := c.Enabled(); ok {
+				out = append(out, c)
+			}
+		}
+		return out
+	}
+	wanted := map[string]struct{}{}
+	for _, w := range want {
+		wanted[strings.ToLower(strings.TrimSpace(w))] = struct{}{}
+	}
+	out := make([]connectors.Connector, 0, len(want))
+	for _, c := range all {
+		if _, ok := wanted[strings.ToLower(c.ID())]; !ok {
+			continue
+		}
+		if enabled, _ := c.Enabled(); !enabled {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+type fanoutResult struct {
+	docs []domain.SourcedDocument
+	err  error
+}
+
+func (s *Service) fanout(
+	ctx context.Context,
+	platforms []connectors.Connector,
+	req AnalyzeTopicRequest,
+) ([]domain.SourcedDocument, error) {
+	var wg sync.WaitGroup
+	resCh := make(chan fanoutResult, len(platforms))
+	q := connectors.Query{
+		Topic:        req.Topic,
+		Limit:        req.LimitPerPlatform,
+		Language:     req.Language,
+		SinceSeconds: req.SinceSeconds,
+	}
+	for _, c := range platforms {
+		wg.Add(1)
+		go func(c connectors.Connector) {
+			defer wg.Done()
+			docs, err := c.Search(ctx, q)
+			resCh <- fanoutResult{docs: docs, err: err}
+		}(c)
+	}
+	wg.Wait()
+	close(resCh)
+
+	var all []domain.SourcedDocument
+	var errs []string
+	for r := range resCh {
+		if r.err != nil {
+			errs = append(errs, r.err.Error())
+			continue
+		}
+		all = append(all, r.docs...)
+	}
+	if len(all) == 0 && len(errs) == len(platforms) {
+		return nil, fmt.Errorf("all connectors failed: %s", strings.Join(errs, "; "))
+	}
+	return all, nil
+}
+
+func buildCacheKey(req AnalyzeTopicRequest) string {
+	parts := []string{
+		strings.ToLower(strings.TrimSpace(req.Topic)),
+		fmt.Sprintf("limit=%d", req.LimitPerPlatform),
+		fmt.Sprintf("lang=%s", req.Language),
+		fmt.Sprintf("since=%d", req.SinceSeconds),
+	}
+	platforms := append([]string{}, req.Platforms...)
+	sort.Strings(platforms)
+	parts = append(parts, "platforms="+strings.Join(platforms, ","))
+	aspects := append([]string{}, req.Aspects...)
+	sort.Strings(aspects)
+	parts = append(parts, "aspects="+strings.Join(aspects, ","))
+	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
+	return hex.EncodeToString(sum[:])
+}
+
+func dedupeByID(docs []domain.SourcedDocument) []domain.SourcedDocument {
+	if len(docs) <= 1 {
+		return docs
+	}
+	seen := make(map[string]struct{}, len(docs))
+	out := make([]domain.SourcedDocument, 0, len(docs))
+	for _, d := range docs {
+		key := d.Platform + "|" + d.Document.ID
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, d)
+	}
+	return out
+}
+
+func aggregateMap(in map[string]*domain.Aggregator) map[string]domain.Aggregate {
+	out := make(map[string]domain.Aggregate, len(in))
+	for k, agg := range in {
+		out[k] = agg.Aggregate()
+	}
+	return out
+}

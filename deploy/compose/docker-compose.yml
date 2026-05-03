@@ -1,0 +1,44 @@
+services:
+  ml:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/ml.Dockerfile
+    image: sentilyzer/ml:dev
+    environment:
+      SENTILYZER_ML_DEVICE: cpu
+      SENTILYZER_ML_USE_STUB: ${SENTILYZER_ML_USE_STUB:-0}
+    ports:
+      - "50051:50051"
+    volumes:
+      - hf_cache:/cache/huggingface
+    healthcheck:
+      test: ["CMD", "python", "-c", "import grpc; grpc.insecure_channel('localhost:50051')"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  api:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/api.Dockerfile
+    image: sentilyzer/api:dev
+    environment:
+      SENTILYZER_HTTP_ADDR: ":8080"
+      SENTILYZER_GRPC_ADDR: ":9090"
+      SENTILYZER_ML_ADDR: "ml:50051"
+      SENTILYZER_USE_MOCK: ${SENTILYZER_USE_MOCK:-true}
+      REDDIT_CLIENT_ID: ${REDDIT_CLIENT_ID:-}
+      REDDIT_CLIENT_SECRET: ${REDDIT_CLIENT_SECRET:-}
+      TWITTER_BEARER_TOKEN: ${TWITTER_BEARER_TOKEN:-}
+      MASTODON_INSTANCE: ${MASTODON_INSTANCE:-}
+      MASTODON_ACCESS_TOKEN: ${MASTODON_ACCESS_TOKEN:-}
+      YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    depends_on:
+      ml:
+        condition: service_started
+
+volumes:
+  hf_cache:

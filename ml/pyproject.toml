@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sentilyzer-ml"
+version = "0.1.0"
+description = "Sentilyzer ML inference worker (gRPC, HuggingFace Transformers)."
+authors = [{ name = "Chijioke Ekechi" }]
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "grpcio>=1.66",
+    "grpcio-tools>=1.66",
+    "protobuf>=5.27",
+    "numpy>=1.26",
+    "transformers>=4.45",
+    "tokenizers>=0.20",
+    "torch>=2.4",
+    "scipy>=1.11",
+    "structlog>=24.1",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+sentilyzer-ml = "sentilyzer_ml.server:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["sentilyzer_ml*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]

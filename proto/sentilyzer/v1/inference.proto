@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package sentilyzer.v1;
+
+option go_package = "github.com/chijiokekechi/sentilyzer/api/gen/go/sentilyzer/v1;sentilyzerv1";
+
+import "sentilyzer/v1/sentilyzer.proto";
+
+// InferenceService is the internal gRPC API spoken between the Go gateway
+// and the Python ML worker. It is intentionally narrower than the public
+// SentilyzerService — no platform discovery, no aggregation, just batched
+// inference.
+service InferenceService {
+  rpc Classify(ClassifyRequest) returns (ClassifyResponse);
+  rpc ClassifyAspects(ClassifyAspectsRequest) returns (ClassifyAspectsResponse);
+  rpc Ready(ReadyRequest) returns (ReadyResponse);
+}
+
+message ClassifyRequest {
+  // Texts to classify in a single batch. The worker will pad/truncate
+  // and run a single forward pass.
+  repeated string texts = 1;
+  // Optional ISO 639-1 hint. Empty = let the model handle it.
+  string language = 2;
+}
+
+message ClassifyResponse {
+  repeated Score scores = 1;
+}
+
+message AspectInput {
+  string text = 1;
+  repeated string aspects = 2;
+}
+
+message AspectResult {
+  // Same order as AspectInput.aspects.
+  repeated AspectScore scores = 1;
+}
+
+message ClassifyAspectsRequest {
+  repeated AspectInput inputs = 1;
+}
+
+message ClassifyAspectsResponse {
+  repeated AspectResult results = 1;
+}
+
+message ReadyRequest {}
+
+message ReadyResponse {
+  bool ready = 1;
+  string general_model = 2;
+  string aspect_model = 3;
+  string device = 4;
+}

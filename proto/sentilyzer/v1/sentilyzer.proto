@@ -1,0 +1,154 @@
+syntax = "proto3";
+
+package sentilyzer.v1;
+
+option go_package = "github.com/chijiokekechi/sentilyzer/api/gen/go/sentilyzer/v1;sentilyzerv1";
+
+import "google/protobuf/timestamp.proto";
+
+// SentilyzerService is the public-facing gRPC API.
+//
+// Each RPC has an equivalent REST/JSON, REST/XML, and GraphQL surface served
+// from the same Go process; see /api/internal/server.
+service SentilyzerService {
+  // AnalyzeText runs sentiment analysis on a batch of inline texts.
+  rpc AnalyzeText(AnalyzeTextRequest) returns (AnalyzeTextResponse);
+
+  // AnalyzeTopic discovers posts about a topic across one or more platforms,
+  // analyzes them, and returns aggregate + per-document scores.
+  rpc AnalyzeTopic(AnalyzeTopicRequest) returns (AnalyzeTopicResponse);
+
+  // ListPlatforms returns the set of connectors enabled on this server.
+  rpc ListPlatforms(ListPlatformsRequest) returns (ListPlatformsResponse);
+
+  // Healthcheck returns 200/SERVING when the API + ML backend are reachable.
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+// Sentiment is a 3-class polarity label produced by the general model.
+enum Sentiment {
+  SENTIMENT_UNSPECIFIED = 0;
+  SENTIMENT_NEGATIVE = 1;
+  SENTIMENT_NEUTRAL = 2;
+  SENTIMENT_POSITIVE = 3;
+}
+
+// Score is the model output for one document or aspect.
+message Score {
+  Sentiment label = 1;
+  // Probability of the predicted label, in [0, 1].
+  float confidence = 2;
+  // Continuous polarity in [-1, 1] (negative…positive).
+  float polarity = 3;
+  // Full distribution: keys are "negative" | "neutral" | "positive".
+  map<string, float> probabilities = 4;
+}
+
+// AspectScore captures sentiment toward a specific aspect within text
+// (e.g., "battery life" of a phone, "service" of an airline).
+message AspectScore {
+  string aspect = 1;
+  Score score = 2;
+}
+
+// Document is one unit of text submitted for analysis.
+message Document {
+  string id = 1;
+  string text = 2;
+  // Optional language hint (ISO 639-1). Server auto-detects if empty.
+  string language = 3;
+  // Aspects to score in addition to the document-level sentiment.
+  repeated string aspects = 4;
+  map<string, string> metadata = 5;
+}
+
+// DocumentResult bundles the model output for a single Document.
+message DocumentResult {
+  string id = 1;
+  Score overall = 2;
+  repeated AspectScore aspects = 3;
+  google.protobuf.Timestamp analyzed_at = 4;
+}
+
+message AnalyzeTextRequest {
+  repeated Document documents = 1;
+  // If true, also produce aspect-level scores for each Document.aspects entry.
+  bool include_aspects = 2;
+}
+
+message AnalyzeTextResponse {
+  repeated DocumentResult results = 1;
+  // Aggregate over all documents (mean polarity, modal label, etc.).
+  Aggregate aggregate = 2;
+}
+
+// SourcedDocument is a Document enriched with the platform it came from.
+message SourcedDocument {
+  Document document = 1;
+  string platform = 2;       // "reddit", "hackernews", "rss", ...
+  string source_url = 3;
+  string author = 4;
+  google.protobuf.Timestamp posted_at = 5;
+}
+
+message AnalyzeTopicRequest {
+  // The topic to search for (e.g., "Robinhood UI", "United Airlines").
+  string topic = 1;
+  // If empty, the server queries every enabled platform.
+  repeated string platforms = 2;
+  // Maximum documents per platform.
+  int32 limit_per_platform = 3;
+  // Aspects to score per document. Empty = no aspect-level analysis.
+  repeated string aspects = 4;
+  // ISO 639-1 language filter; empty = any.
+  string language = 5;
+  // Optional time window in seconds (0 = no limit).
+  int64 since_seconds = 6;
+}
+
+message AnalyzeTopicResponse {
+  string topic = 1;
+  repeated SourcedDocumentResult results = 2;
+  Aggregate aggregate = 3;
+  // Per-platform breakdown.
+  map<string, Aggregate> by_platform = 4;
+  // Aggregate per requested aspect.
+  map<string, Aggregate> by_aspect = 5;
+}
+
+message SourcedDocumentResult {
+  SourcedDocument document = 1;
+  DocumentResult result = 2;
+}
+
+message Aggregate {
+  // Mean polarity in [-1, 1].
+  float mean_polarity = 1;
+  // Counts per label.
+  map<string, int32> label_counts = 2;
+  // Modal label across documents.
+  Sentiment modal_label = 3;
+  int32 sample_size = 4;
+}
+
+message ListPlatformsRequest {}
+
+message PlatformInfo {
+  string id = 1;
+  string display_name = 2;
+  bool enabled = 3;
+  // Reason connector is disabled, when applicable (e.g., "missing API key").
+  string disabled_reason = 4;
+}
+
+message ListPlatformsResponse {
+  repeated PlatformInfo platforms = 1;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  bool healthy = 1;
+  bool ml_reachable = 2;
+  string version = 3;
+}
