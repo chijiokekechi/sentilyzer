@@ -30,7 +30,11 @@ var DefaultFeeds = []string{
 	"https://feeds.bbci.co.uk/news/business/rss.xml",
 	"https://feeds.npr.org/1006/rss.xml",
 	"https://hnrss.org/frontpage",
-	"https://www.reuters.com/markets/rss",
+	// reuters.com/markets/rss was here and served 401 (DataDome) on every
+	// request. Because Search only surfaces firstErr when no feed matched,
+	// it stayed invisible on topics the other feeds covered and reported a
+	// bare "401 Unauthorized" on topics they didn't — blaming a dead feed
+	// for what was really an empty search.
 }
 
 func NewRSS(client *http.Client, feeds []string) *RSS {

@@ -108,12 +108,23 @@ func (g *GraphQL) buildSchema() graphql.Schema {
 			"result":   &graphql.Field{Type: graphql.NewNonNull(documentResultType)},
 		},
 	})
+	warningType := graphql.NewObject(graphql.ObjectConfig{
+		Name: "Warning",
+		Fields: graphql.Fields{
+			"platform": &graphql.Field{Type: graphql.NewNonNull(graphql.String)},
+			"message":  &graphql.Field{Type: graphql.NewNonNull(graphql.String)},
+		},
+	})
 	topicAnalysisType := graphql.NewObject(graphql.ObjectConfig{
 		Name: "TopicAnalysis",
 		Fields: graphql.Fields{
 			"topic":     &graphql.Field{Type: graphql.NewNonNull(graphql.String)},
 			"results":   &graphql.Field{Type: graphql.NewList(sourcedResultType)},
 			"aggregate": &graphql.Field{Type: graphql.NewNonNull(aggregateType)},
+			// A client comparing aggregates across time needs to know the
+			// sample shrank, or it reads a coverage change as a mood change.
+			"partial":  &graphql.Field{Type: graphql.NewNonNull(graphql.Boolean)},
+			"warnings": &graphql.Field{Type: graphql.NewList(warningType)},
 		},
 	})
 	platformType := graphql.NewObject(graphql.ObjectConfig{

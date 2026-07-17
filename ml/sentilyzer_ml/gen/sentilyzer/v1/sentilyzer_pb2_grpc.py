@@ -5,7 +5,7 @@ import warnings
 
 from sentilyzer.v1 import sentilyzer_pb2 as sentilyzer_dot_v1_dot_sentilyzer__pb2
 
-GRPC_GENERATED_VERSION = '1.80.0'
+GRPC_GENERATED_VERSION = '1.82.1'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -25,7 +25,7 @@ if _version_not_supported:
     )
 
 
-class SentilyzerServiceStub(object):
+class SentilyzerServiceStub:
     """SentilyzerService is the public-facing gRPC API.
 
     Each RPC has an equivalent REST/JSON, REST/XML, and GraphQL surface served
@@ -60,7 +60,7 @@ class SentilyzerServiceStub(object):
                 _registered_method=True)
 
 
-class SentilyzerServiceServicer(object):
+class SentilyzerServiceServicer:
     """SentilyzerService is the public-facing gRPC API.
 
     Each RPC has an equivalent REST/JSON, REST/XML, and GraphQL surface served
@@ -127,7 +127,7 @@ def add_SentilyzerServiceServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class SentilyzerService(object):
+class SentilyzerService:
     """SentilyzerService is the public-facing gRPC API.
 
     Each RPC has an equivalent REST/JSON, REST/XML, and GraphQL surface served

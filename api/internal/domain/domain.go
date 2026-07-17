@@ -124,6 +124,13 @@ func (a *Aggregator) Aggregate() Aggregate {
 	}
 }
 
+// Warning records a platform that contributed nothing to a result because it
+// failed or timed out. It is advisory: the analysis is still returned.
+type Warning struct {
+	Platform string `json:"platform" xml:"platform,attr"`
+	Message  string `json:"message" xml:"message"`
+}
+
 // SourcedAnalysis is the result of an AnalyzeTopic request: the per-document
 // scores, the overall aggregate, and aggregates broken down by platform
 // and by requested aspect.
@@ -133,6 +140,17 @@ type SourcedAnalysis struct {
 	Aggregate  Aggregate               `json:"aggregate" xml:"aggregate"`
 	ByPlatform map[string]Aggregate    `json:"by_platform" xml:"-"`
 	ByAspect   map[string]Aggregate    `json:"by_aspect" xml:"-"`
+
+	// Partial reports that at least one requested platform dropped out, so
+	// this analysis covers fewer sources than were asked for. Without it, a
+	// result assembled from 3 of 7 platforms is byte-identical to one
+	// assembled from all 7 — the sample is quietly smaller and more biased
+	// than the caller believes, and nothing in the payload says so.
+	//
+	// Partial results are deliberately not cached; see service.AnalyzeTopic.
+	Partial bool `json:"partial" xml:"partial,attr"`
+	// Warnings names each dropped platform and why. Present only when Partial.
+	Warnings []Warning `json:"warnings,omitempty" xml:"warnings>warning,omitempty"`
 }
 
 // HealthInfo is what GET /health returns.

@@ -622,6 +622,60 @@ func (x *AnalyzeTopicRequest) GetSinceSeconds() int64 {
 	return 0
 }
 
+// Warning records a platform that contributed nothing because it failed or
+// timed out. Advisory only — the analysis is still returned.
+type Warning struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Platform      string                 `protobuf:"bytes,1,opt,name=platform,proto3" json:"platform,omitempty"`
+	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Warning) Reset() {
+	*x = Warning{}
+	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Warning) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Warning) ProtoMessage() {}
+
+func (x *Warning) ProtoReflect() protoreflect.Message {
+	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Warning.ProtoReflect.Descriptor instead.
+func (*Warning) Descriptor() ([]byte, []int) {
+	return file_sentilyzer_v1_sentilyzer_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *Warning) GetPlatform() string {
+	if x != nil {
+		return x.Platform
+	}
+	return ""
+}
+
+func (x *Warning) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
 type AnalyzeTopicResponse struct {
 	state     protoimpl.MessageState   `protogen:"open.v1"`
 	Topic     string                   `protobuf:"bytes,1,opt,name=topic,proto3" json:"topic,omitempty"`
@@ -630,14 +684,21 @@ type AnalyzeTopicResponse struct {
 	// Per-platform breakdown.
 	ByPlatform map[string]*Aggregate `protobuf:"bytes,4,rep,name=by_platform,json=byPlatform,proto3" json:"by_platform,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// Aggregate per requested aspect.
-	ByAspect      map[string]*Aggregate `protobuf:"bytes,5,rep,name=by_aspect,json=byAspect,proto3" json:"by_aspect,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	ByAspect map[string]*Aggregate `protobuf:"bytes,5,rep,name=by_aspect,json=byAspect,proto3" json:"by_aspect,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Partial reports that at least one requested platform dropped out, so this
+	// analysis covers fewer sources than were asked for. Callers that compare
+	// aggregates over time should treat a partial result as a different sample
+	// rather than as a change in sentiment.
+	Partial bool `protobuf:"varint,6,opt,name=partial,proto3" json:"partial,omitempty"`
+	// Names each dropped platform and why. Populated only when partial is true.
+	Warnings      []*Warning `protobuf:"bytes,7,rep,name=warnings,proto3" json:"warnings,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AnalyzeTopicResponse) Reset() {
 	*x = AnalyzeTopicResponse{}
-	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[8]
+	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -649,7 +710,7 @@ func (x *AnalyzeTopicResponse) String() string {
 func (*AnalyzeTopicResponse) ProtoMessage() {}
 
 func (x *AnalyzeTopicResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[8]
+	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -662,7 +723,7 @@ func (x *AnalyzeTopicResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AnalyzeTopicResponse.ProtoReflect.Descriptor instead.
 func (*AnalyzeTopicResponse) Descriptor() ([]byte, []int) {
-	return file_sentilyzer_v1_sentilyzer_proto_rawDescGZIP(), []int{8}
+	return file_sentilyzer_v1_sentilyzer_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *AnalyzeTopicResponse) GetTopic() string {
@@ -700,6 +761,20 @@ func (x *AnalyzeTopicResponse) GetByAspect() map[string]*Aggregate {
 	return nil
 }
 
+func (x *AnalyzeTopicResponse) GetPartial() bool {
+	if x != nil {
+		return x.Partial
+	}
+	return false
+}
+
+func (x *AnalyzeTopicResponse) GetWarnings() []*Warning {
+	if x != nil {
+		return x.Warnings
+	}
+	return nil
+}
+
 type SourcedDocumentResult struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Document      *SourcedDocument       `protobuf:"bytes,1,opt,name=document,proto3" json:"document,omitempty"`
@@ -710,7 +785,7 @@ type SourcedDocumentResult struct {
 
 func (x *SourcedDocumentResult) Reset() {
 	*x = SourcedDocumentResult{}
-	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[9]
+	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -722,7 +797,7 @@ func (x *SourcedDocumentResult) String() string {
 func (*SourcedDocumentResult) ProtoMessage() {}
 
 func (x *SourcedDocumentResult) ProtoReflect() protoreflect.Message {
-	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[9]
+	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -735,7 +810,7 @@ func (x *SourcedDocumentResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SourcedDocumentResult.ProtoReflect.Descriptor instead.
 func (*SourcedDocumentResult) Descriptor() ([]byte, []int) {
-	return file_sentilyzer_v1_sentilyzer_proto_rawDescGZIP(), []int{9}
+	return file_sentilyzer_v1_sentilyzer_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *SourcedDocumentResult) GetDocument() *SourcedDocument {
@@ -767,7 +842,7 @@ type Aggregate struct {
 
 func (x *Aggregate) Reset() {
 	*x = Aggregate{}
-	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[10]
+	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -779,7 +854,7 @@ func (x *Aggregate) String() string {
 func (*Aggregate) ProtoMessage() {}
 
 func (x *Aggregate) ProtoReflect() protoreflect.Message {
-	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[10]
+	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -792,7 +867,7 @@ func (x *Aggregate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Aggregate.ProtoReflect.Descriptor instead.
 func (*Aggregate) Descriptor() ([]byte, []int) {
-	return file_sentilyzer_v1_sentilyzer_proto_rawDescGZIP(), []int{10}
+	return file_sentilyzer_v1_sentilyzer_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *Aggregate) GetMeanPolarity() float32 {
@@ -831,7 +906,7 @@ type ListPlatformsRequest struct {
 
 func (x *ListPlatformsRequest) Reset() {
 	*x = ListPlatformsRequest{}
-	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[11]
+	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -843,7 +918,7 @@ func (x *ListPlatformsRequest) String() string {
 func (*ListPlatformsRequest) ProtoMessage() {}
 
 func (x *ListPlatformsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[11]
+	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -856,7 +931,7 @@ func (x *ListPlatformsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPlatformsRequest.ProtoReflect.Descriptor instead.
 func (*ListPlatformsRequest) Descriptor() ([]byte, []int) {
-	return file_sentilyzer_v1_sentilyzer_proto_rawDescGZIP(), []int{11}
+	return file_sentilyzer_v1_sentilyzer_proto_rawDescGZIP(), []int{12}
 }
 
 type PlatformInfo struct {
@@ -872,7 +947,7 @@ type PlatformInfo struct {
 
 func (x *PlatformInfo) Reset() {
 	*x = PlatformInfo{}
-	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[12]
+	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -884,7 +959,7 @@ func (x *PlatformInfo) String() string {
 func (*PlatformInfo) ProtoMessage() {}
 
 func (x *PlatformInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[12]
+	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -897,7 +972,7 @@ func (x *PlatformInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlatformInfo.ProtoReflect.Descriptor instead.
 func (*PlatformInfo) Descriptor() ([]byte, []int) {
-	return file_sentilyzer_v1_sentilyzer_proto_rawDescGZIP(), []int{12}
+	return file_sentilyzer_v1_sentilyzer_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *PlatformInfo) GetId() string {
@@ -937,7 +1012,7 @@ type ListPlatformsResponse struct {
 
 func (x *ListPlatformsResponse) Reset() {
 	*x = ListPlatformsResponse{}
-	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[13]
+	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -949,7 +1024,7 @@ func (x *ListPlatformsResponse) String() string {
 func (*ListPlatformsResponse) ProtoMessage() {}
 
 func (x *ListPlatformsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[13]
+	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -962,7 +1037,7 @@ func (x *ListPlatformsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPlatformsResponse.ProtoReflect.Descriptor instead.
 func (*ListPlatformsResponse) Descriptor() ([]byte, []int) {
-	return file_sentilyzer_v1_sentilyzer_proto_rawDescGZIP(), []int{13}
+	return file_sentilyzer_v1_sentilyzer_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ListPlatformsResponse) GetPlatforms() []*PlatformInfo {
@@ -980,7 +1055,7 @@ type HealthRequest struct {
 
 func (x *HealthRequest) Reset() {
 	*x = HealthRequest{}
-	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[14]
+	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -992,7 +1067,7 @@ func (x *HealthRequest) String() string {
 func (*HealthRequest) ProtoMessage() {}
 
 func (x *HealthRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[14]
+	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1005,7 +1080,7 @@ func (x *HealthRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthRequest.ProtoReflect.Descriptor instead.
 func (*HealthRequest) Descriptor() ([]byte, []int) {
-	return file_sentilyzer_v1_sentilyzer_proto_rawDescGZIP(), []int{14}
+	return file_sentilyzer_v1_sentilyzer_proto_rawDescGZIP(), []int{15}
 }
 
 type HealthResponse struct {
@@ -1019,7 +1094,7 @@ type HealthResponse struct {
 
 func (x *HealthResponse) Reset() {
 	*x = HealthResponse{}
-	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[15]
+	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1031,7 +1106,7 @@ func (x *HealthResponse) String() string {
 func (*HealthResponse) ProtoMessage() {}
 
 func (x *HealthResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[15]
+	mi := &file_sentilyzer_v1_sentilyzer_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1044,7 +1119,7 @@ func (x *HealthResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthResponse.ProtoReflect.Descriptor instead.
 func (*HealthResponse) Descriptor() ([]byte, []int) {
-	return file_sentilyzer_v1_sentilyzer_proto_rawDescGZIP(), []int{15}
+	return file_sentilyzer_v1_sentilyzer_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *HealthResponse) GetHealthy() bool {
@@ -1120,14 +1195,19 @@ const file_sentilyzer_v1_sentilyzer_proto_rawDesc = "" +
 	"\x12limit_per_platform\x18\x03 \x01(\x05R\x10limitPerPlatform\x12\x18\n" +
 	"\aaspects\x18\x04 \x03(\tR\aaspects\x12\x1a\n" +
 	"\blanguage\x18\x05 \x01(\tR\blanguage\x12#\n" +
-	"\rsince_seconds\x18\x06 \x01(\x03R\fsinceSeconds\"\xfa\x03\n" +
+	"\rsince_seconds\x18\x06 \x01(\x03R\fsinceSeconds\"?\n" +
+	"\aWarning\x12\x1a\n" +
+	"\bplatform\x18\x01 \x01(\tR\bplatform\x12\x18\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xc8\x04\n" +
 	"\x14AnalyzeTopicResponse\x12\x14\n" +
 	"\x05topic\x18\x01 \x01(\tR\x05topic\x12>\n" +
 	"\aresults\x18\x02 \x03(\v2$.sentilyzer.v1.SourcedDocumentResultR\aresults\x126\n" +
 	"\taggregate\x18\x03 \x01(\v2\x18.sentilyzer.v1.AggregateR\taggregate\x12T\n" +
 	"\vby_platform\x18\x04 \x03(\v23.sentilyzer.v1.AnalyzeTopicResponse.ByPlatformEntryR\n" +
 	"byPlatform\x12N\n" +
-	"\tby_aspect\x18\x05 \x03(\v21.sentilyzer.v1.AnalyzeTopicResponse.ByAspectEntryR\bbyAspect\x1aW\n" +
+	"\tby_aspect\x18\x05 \x03(\v21.sentilyzer.v1.AnalyzeTopicResponse.ByAspectEntryR\bbyAspect\x12\x18\n" +
+	"\apartial\x18\x06 \x01(\bR\apartial\x122\n" +
+	"\bwarnings\x18\a \x03(\v2\x16.sentilyzer.v1.WarningR\bwarnings\x1aW\n" +
 	"\x0fByPlatformEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12.\n" +
 	"\x05value\x18\x02 \x01(\v2\x18.sentilyzer.v1.AggregateR\x05value:\x028\x01\x1aU\n" +
@@ -1184,7 +1264,7 @@ func file_sentilyzer_v1_sentilyzer_proto_rawDescGZIP() []byte {
 }
 
 var file_sentilyzer_v1_sentilyzer_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_sentilyzer_v1_sentilyzer_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
+var file_sentilyzer_v1_sentilyzer_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
 var file_sentilyzer_v1_sentilyzer_proto_goTypes = []any{
 	(Sentiment)(0),                // 0: sentilyzer.v1.Sentiment
 	(*Score)(nil),                 // 1: sentilyzer.v1.Score
@@ -1195,58 +1275,60 @@ var file_sentilyzer_v1_sentilyzer_proto_goTypes = []any{
 	(*AnalyzeTextResponse)(nil),   // 6: sentilyzer.v1.AnalyzeTextResponse
 	(*SourcedDocument)(nil),       // 7: sentilyzer.v1.SourcedDocument
 	(*AnalyzeTopicRequest)(nil),   // 8: sentilyzer.v1.AnalyzeTopicRequest
-	(*AnalyzeTopicResponse)(nil),  // 9: sentilyzer.v1.AnalyzeTopicResponse
-	(*SourcedDocumentResult)(nil), // 10: sentilyzer.v1.SourcedDocumentResult
-	(*Aggregate)(nil),             // 11: sentilyzer.v1.Aggregate
-	(*ListPlatformsRequest)(nil),  // 12: sentilyzer.v1.ListPlatformsRequest
-	(*PlatformInfo)(nil),          // 13: sentilyzer.v1.PlatformInfo
-	(*ListPlatformsResponse)(nil), // 14: sentilyzer.v1.ListPlatformsResponse
-	(*HealthRequest)(nil),         // 15: sentilyzer.v1.HealthRequest
-	(*HealthResponse)(nil),        // 16: sentilyzer.v1.HealthResponse
-	nil,                           // 17: sentilyzer.v1.Score.ProbabilitiesEntry
-	nil,                           // 18: sentilyzer.v1.Document.MetadataEntry
-	nil,                           // 19: sentilyzer.v1.AnalyzeTopicResponse.ByPlatformEntry
-	nil,                           // 20: sentilyzer.v1.AnalyzeTopicResponse.ByAspectEntry
-	nil,                           // 21: sentilyzer.v1.Aggregate.LabelCountsEntry
-	(*timestamppb.Timestamp)(nil), // 22: google.protobuf.Timestamp
+	(*Warning)(nil),               // 9: sentilyzer.v1.Warning
+	(*AnalyzeTopicResponse)(nil),  // 10: sentilyzer.v1.AnalyzeTopicResponse
+	(*SourcedDocumentResult)(nil), // 11: sentilyzer.v1.SourcedDocumentResult
+	(*Aggregate)(nil),             // 12: sentilyzer.v1.Aggregate
+	(*ListPlatformsRequest)(nil),  // 13: sentilyzer.v1.ListPlatformsRequest
+	(*PlatformInfo)(nil),          // 14: sentilyzer.v1.PlatformInfo
+	(*ListPlatformsResponse)(nil), // 15: sentilyzer.v1.ListPlatformsResponse
+	(*HealthRequest)(nil),         // 16: sentilyzer.v1.HealthRequest
+	(*HealthResponse)(nil),        // 17: sentilyzer.v1.HealthResponse
+	nil,                           // 18: sentilyzer.v1.Score.ProbabilitiesEntry
+	nil,                           // 19: sentilyzer.v1.Document.MetadataEntry
+	nil,                           // 20: sentilyzer.v1.AnalyzeTopicResponse.ByPlatformEntry
+	nil,                           // 21: sentilyzer.v1.AnalyzeTopicResponse.ByAspectEntry
+	nil,                           // 22: sentilyzer.v1.Aggregate.LabelCountsEntry
+	(*timestamppb.Timestamp)(nil), // 23: google.protobuf.Timestamp
 }
 var file_sentilyzer_v1_sentilyzer_proto_depIdxs = []int32{
 	0,  // 0: sentilyzer.v1.Score.label:type_name -> sentilyzer.v1.Sentiment
-	17, // 1: sentilyzer.v1.Score.probabilities:type_name -> sentilyzer.v1.Score.ProbabilitiesEntry
+	18, // 1: sentilyzer.v1.Score.probabilities:type_name -> sentilyzer.v1.Score.ProbabilitiesEntry
 	1,  // 2: sentilyzer.v1.AspectScore.score:type_name -> sentilyzer.v1.Score
-	18, // 3: sentilyzer.v1.Document.metadata:type_name -> sentilyzer.v1.Document.MetadataEntry
+	19, // 3: sentilyzer.v1.Document.metadata:type_name -> sentilyzer.v1.Document.MetadataEntry
 	1,  // 4: sentilyzer.v1.DocumentResult.overall:type_name -> sentilyzer.v1.Score
 	2,  // 5: sentilyzer.v1.DocumentResult.aspects:type_name -> sentilyzer.v1.AspectScore
-	22, // 6: sentilyzer.v1.DocumentResult.analyzed_at:type_name -> google.protobuf.Timestamp
+	23, // 6: sentilyzer.v1.DocumentResult.analyzed_at:type_name -> google.protobuf.Timestamp
 	3,  // 7: sentilyzer.v1.AnalyzeTextRequest.documents:type_name -> sentilyzer.v1.Document
 	4,  // 8: sentilyzer.v1.AnalyzeTextResponse.results:type_name -> sentilyzer.v1.DocumentResult
-	11, // 9: sentilyzer.v1.AnalyzeTextResponse.aggregate:type_name -> sentilyzer.v1.Aggregate
+	12, // 9: sentilyzer.v1.AnalyzeTextResponse.aggregate:type_name -> sentilyzer.v1.Aggregate
 	3,  // 10: sentilyzer.v1.SourcedDocument.document:type_name -> sentilyzer.v1.Document
-	22, // 11: sentilyzer.v1.SourcedDocument.posted_at:type_name -> google.protobuf.Timestamp
-	10, // 12: sentilyzer.v1.AnalyzeTopicResponse.results:type_name -> sentilyzer.v1.SourcedDocumentResult
-	11, // 13: sentilyzer.v1.AnalyzeTopicResponse.aggregate:type_name -> sentilyzer.v1.Aggregate
-	19, // 14: sentilyzer.v1.AnalyzeTopicResponse.by_platform:type_name -> sentilyzer.v1.AnalyzeTopicResponse.ByPlatformEntry
-	20, // 15: sentilyzer.v1.AnalyzeTopicResponse.by_aspect:type_name -> sentilyzer.v1.AnalyzeTopicResponse.ByAspectEntry
-	7,  // 16: sentilyzer.v1.SourcedDocumentResult.document:type_name -> sentilyzer.v1.SourcedDocument
-	4,  // 17: sentilyzer.v1.SourcedDocumentResult.result:type_name -> sentilyzer.v1.DocumentResult
-	21, // 18: sentilyzer.v1.Aggregate.label_counts:type_name -> sentilyzer.v1.Aggregate.LabelCountsEntry
-	0,  // 19: sentilyzer.v1.Aggregate.modal_label:type_name -> sentilyzer.v1.Sentiment
-	13, // 20: sentilyzer.v1.ListPlatformsResponse.platforms:type_name -> sentilyzer.v1.PlatformInfo
-	11, // 21: sentilyzer.v1.AnalyzeTopicResponse.ByPlatformEntry.value:type_name -> sentilyzer.v1.Aggregate
-	11, // 22: sentilyzer.v1.AnalyzeTopicResponse.ByAspectEntry.value:type_name -> sentilyzer.v1.Aggregate
-	5,  // 23: sentilyzer.v1.SentilyzerService.AnalyzeText:input_type -> sentilyzer.v1.AnalyzeTextRequest
-	8,  // 24: sentilyzer.v1.SentilyzerService.AnalyzeTopic:input_type -> sentilyzer.v1.AnalyzeTopicRequest
-	12, // 25: sentilyzer.v1.SentilyzerService.ListPlatforms:input_type -> sentilyzer.v1.ListPlatformsRequest
-	15, // 26: sentilyzer.v1.SentilyzerService.Health:input_type -> sentilyzer.v1.HealthRequest
-	6,  // 27: sentilyzer.v1.SentilyzerService.AnalyzeText:output_type -> sentilyzer.v1.AnalyzeTextResponse
-	9,  // 28: sentilyzer.v1.SentilyzerService.AnalyzeTopic:output_type -> sentilyzer.v1.AnalyzeTopicResponse
-	14, // 29: sentilyzer.v1.SentilyzerService.ListPlatforms:output_type -> sentilyzer.v1.ListPlatformsResponse
-	16, // 30: sentilyzer.v1.SentilyzerService.Health:output_type -> sentilyzer.v1.HealthResponse
-	27, // [27:31] is the sub-list for method output_type
-	23, // [23:27] is the sub-list for method input_type
-	23, // [23:23] is the sub-list for extension type_name
-	23, // [23:23] is the sub-list for extension extendee
-	0,  // [0:23] is the sub-list for field type_name
+	23, // 11: sentilyzer.v1.SourcedDocument.posted_at:type_name -> google.protobuf.Timestamp
+	11, // 12: sentilyzer.v1.AnalyzeTopicResponse.results:type_name -> sentilyzer.v1.SourcedDocumentResult
+	12, // 13: sentilyzer.v1.AnalyzeTopicResponse.aggregate:type_name -> sentilyzer.v1.Aggregate
+	20, // 14: sentilyzer.v1.AnalyzeTopicResponse.by_platform:type_name -> sentilyzer.v1.AnalyzeTopicResponse.ByPlatformEntry
+	21, // 15: sentilyzer.v1.AnalyzeTopicResponse.by_aspect:type_name -> sentilyzer.v1.AnalyzeTopicResponse.ByAspectEntry
+	9,  // 16: sentilyzer.v1.AnalyzeTopicResponse.warnings:type_name -> sentilyzer.v1.Warning
+	7,  // 17: sentilyzer.v1.SourcedDocumentResult.document:type_name -> sentilyzer.v1.SourcedDocument
+	4,  // 18: sentilyzer.v1.SourcedDocumentResult.result:type_name -> sentilyzer.v1.DocumentResult
+	22, // 19: sentilyzer.v1.Aggregate.label_counts:type_name -> sentilyzer.v1.Aggregate.LabelCountsEntry
+	0,  // 20: sentilyzer.v1.Aggregate.modal_label:type_name -> sentilyzer.v1.Sentiment
+	14, // 21: sentilyzer.v1.ListPlatformsResponse.platforms:type_name -> sentilyzer.v1.PlatformInfo
+	12, // 22: sentilyzer.v1.AnalyzeTopicResponse.ByPlatformEntry.value:type_name -> sentilyzer.v1.Aggregate
+	12, // 23: sentilyzer.v1.AnalyzeTopicResponse.ByAspectEntry.value:type_name -> sentilyzer.v1.Aggregate
+	5,  // 24: sentilyzer.v1.SentilyzerService.AnalyzeText:input_type -> sentilyzer.v1.AnalyzeTextRequest
+	8,  // 25: sentilyzer.v1.SentilyzerService.AnalyzeTopic:input_type -> sentilyzer.v1.AnalyzeTopicRequest
+	13, // 26: sentilyzer.v1.SentilyzerService.ListPlatforms:input_type -> sentilyzer.v1.ListPlatformsRequest
+	16, // 27: sentilyzer.v1.SentilyzerService.Health:input_type -> sentilyzer.v1.HealthRequest
+	6,  // 28: sentilyzer.v1.SentilyzerService.AnalyzeText:output_type -> sentilyzer.v1.AnalyzeTextResponse
+	10, // 29: sentilyzer.v1.SentilyzerService.AnalyzeTopic:output_type -> sentilyzer.v1.AnalyzeTopicResponse
+	15, // 30: sentilyzer.v1.SentilyzerService.ListPlatforms:output_type -> sentilyzer.v1.ListPlatformsResponse
+	17, // 31: sentilyzer.v1.SentilyzerService.Health:output_type -> sentilyzer.v1.HealthResponse
+	28, // [28:32] is the sub-list for method output_type
+	24, // [24:28] is the sub-list for method input_type
+	24, // [24:24] is the sub-list for extension type_name
+	24, // [24:24] is the sub-list for extension extendee
+	0,  // [0:24] is the sub-list for field type_name
 }
 
 func init() { file_sentilyzer_v1_sentilyzer_proto_init() }
@@ -1260,7 +1342,7 @@ func file_sentilyzer_v1_sentilyzer_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_sentilyzer_v1_sentilyzer_proto_rawDesc), len(file_sentilyzer_v1_sentilyzer_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   21,
+			NumMessages:   22,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

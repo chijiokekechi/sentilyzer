@@ -87,7 +87,7 @@ class AnalyzeTextRequest(_message.Message):
     INCLUDE_ASPECTS_FIELD_NUMBER: _ClassVar[int]
     documents: _containers.RepeatedCompositeFieldContainer[Document]
     include_aspects: bool
-    def __init__(self, documents: _Optional[_Iterable[_Union[Document, _Mapping]]] = ..., include_aspects: bool = ...) -> None: ...
+    def __init__(self, documents: _Optional[_Iterable[_Union[Document, _Mapping]]] = ..., include_aspects: _Optional[bool] = ...) -> None: ...
 
 class AnalyzeTextResponse(_message.Message):
     __slots__ = ("results", "aggregate")
@@ -127,8 +127,16 @@ class AnalyzeTopicRequest(_message.Message):
     since_seconds: int
     def __init__(self, topic: _Optional[str] = ..., platforms: _Optional[_Iterable[str]] = ..., limit_per_platform: _Optional[int] = ..., aspects: _Optional[_Iterable[str]] = ..., language: _Optional[str] = ..., since_seconds: _Optional[int] = ...) -> None: ...
 
+class Warning(_message.Message):
+    __slots__ = ("platform", "message")
+    PLATFORM_FIELD_NUMBER: _ClassVar[int]
+    MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    platform: str
+    message: str
+    def __init__(self, platform: _Optional[str] = ..., message: _Optional[str] = ...) -> None: ...
+
 class AnalyzeTopicResponse(_message.Message):
-    __slots__ = ("topic", "results", "aggregate", "by_platform", "by_aspect")
+    __slots__ = ("topic", "results", "aggregate", "by_platform", "by_aspect", "partial", "warnings")
     class ByPlatformEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -148,12 +156,16 @@ class AnalyzeTopicResponse(_message.Message):
     AGGREGATE_FIELD_NUMBER: _ClassVar[int]
     BY_PLATFORM_FIELD_NUMBER: _ClassVar[int]
     BY_ASPECT_FIELD_NUMBER: _ClassVar[int]
+    PARTIAL_FIELD_NUMBER: _ClassVar[int]
+    WARNINGS_FIELD_NUMBER: _ClassVar[int]
     topic: str
     results: _containers.RepeatedCompositeFieldContainer[SourcedDocumentResult]
     aggregate: Aggregate
     by_platform: _containers.MessageMap[str, Aggregate]
     by_aspect: _containers.MessageMap[str, Aggregate]
-    def __init__(self, topic: _Optional[str] = ..., results: _Optional[_Iterable[_Union[SourcedDocumentResult, _Mapping]]] = ..., aggregate: _Optional[_Union[Aggregate, _Mapping]] = ..., by_platform: _Optional[_Mapping[str, Aggregate]] = ..., by_aspect: _Optional[_Mapping[str, Aggregate]] = ...) -> None: ...
+    partial: bool
+    warnings: _containers.RepeatedCompositeFieldContainer[Warning]
+    def __init__(self, topic: _Optional[str] = ..., results: _Optional[_Iterable[_Union[SourcedDocumentResult, _Mapping]]] = ..., aggregate: _Optional[_Union[Aggregate, _Mapping]] = ..., by_platform: _Optional[_Mapping[str, Aggregate]] = ..., by_aspect: _Optional[_Mapping[str, Aggregate]] = ..., partial: _Optional[bool] = ..., warnings: _Optional[_Iterable[_Union[Warning, _Mapping]]] = ...) -> None: ...
 
 class SourcedDocumentResult(_message.Message):
     __slots__ = ("document", "result")
@@ -196,7 +208,7 @@ class PlatformInfo(_message.Message):
     display_name: str
     enabled: bool
     disabled_reason: str
-    def __init__(self, id: _Optional[str] = ..., display_name: _Optional[str] = ..., enabled: bool = ..., disabled_reason: _Optional[str] = ...) -> None: ...
+    def __init__(self, id: _Optional[str] = ..., display_name: _Optional[str] = ..., enabled: _Optional[bool] = ..., disabled_reason: _Optional[str] = ...) -> None: ...
 
 class ListPlatformsResponse(_message.Message):
     __slots__ = ("platforms",)
@@ -216,4 +228,4 @@ class HealthResponse(_message.Message):
     healthy: bool
     ml_reachable: bool
     version: str
-    def __init__(self, healthy: bool = ..., ml_reachable: bool = ..., version: _Optional[str] = ...) -> None: ...
+    def __init__(self, healthy: _Optional[bool] = ..., ml_reachable: _Optional[bool] = ..., version: _Optional[str] = ...) -> None: ...

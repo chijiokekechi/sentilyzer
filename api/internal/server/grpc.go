@@ -72,8 +72,21 @@ func (g *GRPC) AnalyzeTopic(
 		Aggregate:  aggregateToProto(resp.Aggregate),
 		ByPlatform: aggregateMapToProto(resp.ByPlatform),
 		ByAspect:   aggregateMapToProto(resp.ByAspect),
+		Partial:    resp.Partial,
+		Warnings:   warningsToProto(resp.Warnings),
 	}
 	return out, nil
+}
+
+func warningsToProto(in []domain.Warning) []*pb.Warning {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]*pb.Warning, len(in))
+	for i, w := range in {
+		out[i] = &pb.Warning{Platform: w.Platform, Message: w.Message}
+	}
+	return out
 }
 
 func (g *GRPC) ListPlatforms(

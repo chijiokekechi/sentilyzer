@@ -106,6 +106,13 @@ message AnalyzeTopicRequest {
   int64 since_seconds = 6;
 }
 
+// Warning records a platform that contributed nothing because it failed or
+// timed out. Advisory only — the analysis is still returned.
+message Warning {
+  string platform = 1;
+  string message = 2;
+}
+
 message AnalyzeTopicResponse {
   string topic = 1;
   repeated SourcedDocumentResult results = 2;
@@ -114,6 +121,13 @@ message AnalyzeTopicResponse {
   map<string, Aggregate> by_platform = 4;
   // Aggregate per requested aspect.
   map<string, Aggregate> by_aspect = 5;
+  // Partial reports that at least one requested platform dropped out, so this
+  // analysis covers fewer sources than were asked for. Callers that compare
+  // aggregates over time should treat a partial result as a different sample
+  // rather than as a change in sentiment.
+  bool partial = 6;
+  // Names each dropped platform and why. Populated only when partial is true.
+  repeated Warning warnings = 7;
 }
 
 message SourcedDocumentResult {
