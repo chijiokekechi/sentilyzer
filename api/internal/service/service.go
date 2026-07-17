@@ -17,19 +17,33 @@ import (
 	"github.com/chijiokekechi/sentilyzer/api/internal/connectors"
 	"github.com/chijiokekechi/sentilyzer/api/internal/domain"
 	"github.com/chijiokekechi/sentilyzer/api/internal/inference"
-	"github.com/chijiokekechi/sentilyzer/api/internal/store"
 )
 
 // DefaultConnectorTimeout bounds how long any single connector may take
 // before fanout gives up on it and reports it as a warning.
 const DefaultConnectorTimeout = 3 * time.Second
 
+// Sentinel errors, so transports can map a failure onto a protocol-correct
+// status without matching on message text. Wrap them with %w rather than
+// rebuilding the string.
+var (
+	// ErrInvalidRequest marks anything malformed the caller sent. Wrap it to
+	// add specifics: fmt.Errorf("%w: ...", service.ErrInvalidRequest).
+	ErrInvalidRequest = errors.New("invalid request")
+	// ErrTopicRequired means the caller sent no topic. Their mistake.
+	ErrTopicRequired = errors.New("topic is required")
+	// ErrNoPlatforms means the server has no usable connector. Our problem,
+	// not the caller's — no retry or reworded request will help.
+	ErrNoPlatforms = errors.New("no platforms enabled — set credentials or SENTILYZER_USE_MOCK=true")
+	// ErrAllConnectorsFailed means every upstream we asked returned an error.
+	ErrAllConnectorsFailed = errors.New("all connectors failed")
+)
+
 // Service is the central business logic component.
 type Service struct {
 	Inference  inference.Client
 	Connectors *connectors.Registry
 	Cache      *cache.TTLCache[string, *domain.SourcedAnalysis]
-	Store      *store.Store // optional; nil disables persistence
 	Now        func() time.Time
 	// ConnectorTimeout overrides DefaultConnectorTimeout. Zero means default.
 	ConnectorTimeout time.Duration
@@ -39,7 +53,6 @@ type Service struct {
 func New(
 	inf inference.Client,
 	reg *connectors.Registry,
-	st *store.Store,
 	cacheTTL time.Duration,
 ) (*Service, error) {
 	if inf == nil {
@@ -56,7 +69,6 @@ func New(
 		Inference:  inf,
 		Connectors: reg,
 		Cache:      c,
-		Store:      st,
 		Now:        time.Now,
 	}, nil
 }
@@ -146,7 +158,7 @@ type AnalyzeTopicRequest struct {
 // AnalyzeTopic gathers posts and runs analysis.
 func (s *Service) AnalyzeTopic(ctx context.Context, req AnalyzeTopicRequest) (*domain.SourcedAnalysis, error) {
 	if strings.TrimSpace(req.Topic) == "" {
-		return nil, errors.New("topic is required")
+		return nil, ErrTopicRequired
 	}
 	if req.LimitPerPlatform <= 0 {
 		req.LimitPerPlatform = 20
@@ -159,7 +171,7 @@ func (s *Service) AnalyzeTopic(ctx context.Context, req AnalyzeTopicRequest) (*d
 
 	platforms := s.selectPlatforms(req.Platforms)
 	if len(platforms) == 0 {
-		return nil, errors.New("no platforms enabled — set credentials or SENTILYZER_USE_MOCK=true")
+		return nil, ErrNoPlatforms
 	}
 
 	docs, warnings, err := s.fanout(ctx, platforms, req)
@@ -245,12 +257,6 @@ func (s *Service) AnalyzeTopic(ctx context.Context, req AnalyzeTopicRequest) (*d
 	// would be served the smaller sample without another request being made.
 	if !out.Partial {
 		s.Cache.Set(cacheKey, out)
-	}
-	if s.Store != nil {
-		if err := s.Store.SaveTopicResults(ctx, req.Topic, results); err != nil {
-			// persistence is best-effort — don't fail the request
-			fmt.Printf("warning: persistence failed: %v\n", err)
-		}
 	}
 	return out, nil
 }
@@ -371,7 +377,7 @@ func (s *Service) fanout(
 		all = append(all, r.docs...)
 	}
 	if len(errs) == len(platforms) {
-		return nil, warnings, fmt.Errorf("all connectors failed: %s", strings.Join(errs, "; "))
+		return nil, warnings, fmt.Errorf("%w: %s", ErrAllConnectorsFailed, strings.Join(errs, "; "))
 	}
 	return all, warnings, nil
 }

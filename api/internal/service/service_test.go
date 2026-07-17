@@ -15,7 +15,7 @@ func newServiceWithMock(t *testing.T) *service.Service {
 	t.Helper()
 	reg := connectors.NewRegistry()
 	reg.Register(connectors.Mock{})
-	svc, err := service.New(inference.NewFakeClient(), reg, nil, time.Minute)
+	svc, err := service.New(inference.NewFakeClient(), reg, time.Minute)
 	if err != nil {
 		t.Fatalf("service.New: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestAnalyzeTopic_NoEnabledPlatforms(t *testing.T) {
 	reg := connectors.NewRegistry()
 	// Register a connector that's permanently disabled.
 	reg.Register(disabledConnector{})
-	svc, err := service.New(inference.NewFakeClient(), reg, nil, time.Minute)
+	svc, err := service.New(inference.NewFakeClient(), reg, time.Minute)
 	if err != nil {
 		t.Fatalf("service.New: %v", err)
 	}
@@ -121,9 +121,9 @@ func TestAnalyzeTopic_NoEnabledPlatforms(t *testing.T) {
 
 type disabledConnector struct{}
 
-func (disabledConnector) ID() string                                { return "disabled" }
-func (disabledConnector) DisplayName() string                       { return "Disabled" }
-func (disabledConnector) Enabled() (bool, string)                   { return false, "missing creds" }
+func (disabledConnector) ID() string              { return "disabled" }
+func (disabledConnector) DisplayName() string     { return "Disabled" }
+func (disabledConnector) Enabled() (bool, string) { return false, "missing creds" }
 func (disabledConnector) Search(context.Context, connectors.Query) ([]domain.SourcedDocument, error) {
 	return nil, nil
 }

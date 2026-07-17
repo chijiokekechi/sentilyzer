@@ -17,7 +17,6 @@ type Config struct {
 	UseMock    bool
 	LogLevel   string
 	CacheTTL   time.Duration
-	DBDSN      string
 	Reddit     RedditCreds
 	Twitter    TwitterCreds
 	Mastodon   MastodonCreds
@@ -60,7 +59,6 @@ func Load() (*Config, error) {
 		MLMaxBatch: getenvInt("SENTILYZER_ML_MAX_BATCH", 32),
 		UseMock:    getenvBool("SENTILYZER_USE_MOCK", false),
 		LogLevel:   getenv("SENTILYZER_LOG_LEVEL", "info"),
-		DBDSN:      getenv("SENTILYZER_DB_DSN", "file:sentilyzer.db?_pragma=journal_mode(WAL)"),
 		Reddit: RedditCreds{
 			ClientID:     os.Getenv("REDDIT_CLIENT_ID"),
 			ClientSecret: os.Getenv("REDDIT_CLIENT_SECRET"),

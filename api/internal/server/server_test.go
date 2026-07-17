@@ -27,7 +27,7 @@ func newTestService(t *testing.T) *service.Service {
 	t.Helper()
 	reg := connectors.NewRegistry()
 	reg.Register(connectors.Mock{})
-	svc, err := service.New(inference.NewFakeClient(), reg, nil, time.Minute)
+	svc, err := service.New(inference.NewFakeClient(), reg, time.Minute)
 	if err != nil {
 		t.Fatalf("service.New: %v", err)
 	}

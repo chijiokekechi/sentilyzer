@@ -60,7 +60,7 @@ func newServiceWith(t *testing.T, timeout time.Duration, cs ...connectors.Connec
 	for _, c := range cs {
 		reg.Register(c)
 	}
-	svc, err := service.New(inference.NewFakeClient(), reg, nil, time.Minute)
+	svc, err := service.New(inference.NewFakeClient(), reg, time.Minute)
 	if err != nil {
 		t.Fatalf("service.New: %v", err)
 	}

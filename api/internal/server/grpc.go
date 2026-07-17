@@ -44,7 +44,7 @@ func (g *GRPC) AnalyzeText(
 		IncludeAspects: req.IncludeAspects,
 	})
 	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
+		return nil, status.Error(grpcCodeFor(err), err.Error())
 	}
 	return &pb.AnalyzeTextResponse{
 		Results:   docResultsToProto(resp.Results),
@@ -64,7 +64,7 @@ func (g *GRPC) AnalyzeTopic(
 		SinceSeconds:     req.SinceSeconds,
 	})
 	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
+		return nil, status.Error(grpcCodeFor(err), err.Error())
 	}
 	out := &pb.AnalyzeTopicResponse{
 		Topic:      resp.Topic,

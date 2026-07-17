@@ -5,25 +5,31 @@ package server
 import (
 	"encoding/json"
 	"encoding/xml"
-	"errors"
 	"fmt"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/chijiokekechi/sentilyzer/api/internal/domain"
 	"github.com/chijiokekechi/sentilyzer/api/internal/service"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"sigs.k8s.io/yaml"
 )
 
-const (
-	mimeJSON = "application/json"
-	mimeXML  = "application/xml"
-)
+// requestTimeout caps a whole HTTP request.
+//
+// It sits above the per-connector budget (service.DefaultConnectorTimeout,
+// 3s) and the inference client's own deadline, so it is a backstop rather
+// than the thing that normally fires. The previous 60s was ~6x the measured
+// p99 of a cold uncached request, which meant a stuck request held a
+// connection long past the point anyone was still waiting for it.
+const requestTimeout = 15 * time.Second
 
-// REST holds dependencies for the JSON/XML handlers. It's a single struct
-// because the two share routes, response types, and content negotiation —
+// REST holds dependencies for the JSON/XML/YAML handlers. It's a single
+// struct because they share routes, response types, and content negotiation —
 // the only difference is the encoder used to write the response body.
 type REST struct {
 	Service *service.Service
@@ -35,8 +41,9 @@ func (r *REST) Router() http.Handler {
 	rt.Use(middleware.RequestID)
 	rt.Use(middleware.RealIP)
 	rt.Use(middleware.Recoverer)
-	rt.Use(middleware.Timeout(60_000_000_000)) // 60s
+	rt.Use(middleware.Timeout(requestTimeout))
 	rt.Use(noStore)
+	rt.Use(negotiateMedia)
 
 	rt.Get("/health", r.handleHealth)
 	rt.Get("/v1/platforms", r.handleListPlatforms)
@@ -53,7 +60,7 @@ func (r *REST) Router() http.Handler {
 func (r *REST) handleHealth(w http.ResponseWriter, req *http.Request) {
 	info, err := r.Service.Health(req.Context())
 	if err != nil {
-		writeError(w, req, http.StatusInternalServerError, err)
+		writeError(w, req, err)
 		return
 	}
 	info.Version = r.Version
@@ -77,11 +84,11 @@ type analyzeTextDTO struct {
 func (r *REST) handleAnalyzeText(w http.ResponseWriter, req *http.Request) {
 	var body analyzeTextDTO
 	if err := decodeRequest(req, &body); err != nil {
-		writeError(w, req, http.StatusBadRequest, err)
+		writeError(w, req, err)
 		return
 	}
 	if len(body.Documents) == 0 {
-		writeError(w, req, http.StatusBadRequest, errors.New("documents must not be empty"))
+		writeError(w, req, fmt.Errorf("%w: documents must not be empty", service.ErrInvalidRequest))
 		return
 	}
 	resp, err := r.Service.AnalyzeText(req.Context(), service.AnalyzeTextRequest{
@@ -89,7 +96,7 @@ func (r *REST) handleAnalyzeText(w http.ResponseWriter, req *http.Request) {
 		IncludeAspects: body.IncludeAspects,
 	})
 	if err != nil {
-		writeError(w, req, http.StatusInternalServerError, err)
+		writeError(w, req, err)
 		return
 	}
 	writePayload(w, req, http.StatusOK, struct {
@@ -112,7 +119,7 @@ type analyzeTopicDTO struct {
 func (r *REST) handleAnalyzeTopic(w http.ResponseWriter, req *http.Request) {
 	var body analyzeTopicDTO
 	if err := decodeRequest(req, &body); err != nil {
-		writeError(w, req, http.StatusBadRequest, err)
+		writeError(w, req, err)
 		return
 	}
 	r.runTopic(w, req, body)
@@ -145,7 +152,7 @@ func (r *REST) handleAnalyzeTopicGET(w http.ResponseWriter, req *http.Request) {
 
 func (r *REST) runTopic(w http.ResponseWriter, req *http.Request, body analyzeTopicDTO) {
 	if body.Topic == "" {
-		writeError(w, req, http.StatusBadRequest, errors.New("topic is required"))
+		writeError(w, req, service.ErrTopicRequired)
 		return
 	}
 	resp, err := r.Service.AnalyzeTopic(req.Context(), service.AnalyzeTopicRequest{
@@ -157,7 +164,7 @@ func (r *REST) runTopic(w http.ResponseWriter, req *http.Request, body analyzeTo
 		SinceSeconds:     body.SinceSeconds,
 	})
 	if err != nil {
-		writeError(w, req, http.StatusBadGateway, err)
+		writeError(w, req, err)
 		return
 	}
 	writePayload(w, req, http.StatusOK, asTopicEnvelope(resp))
@@ -183,6 +190,8 @@ func asTopicEnvelope(a *domain.SourcedAnalysis) any {
 		Aggregate  domain.Aggregate               `json:"aggregate" xml:"aggregate"`
 		ByPlatform map[string]domain.Aggregate    `json:"by_platform" xml:"-"`
 		ByAspect   map[string]domain.Aggregate    `json:"by_aspect" xml:"-"`
+		Partial    bool                           `json:"partial" xml:"partial,attr"`
+		Warnings   []domain.Warning               `json:"warnings,omitempty" xml:"warnings>warning,omitempty"`
 		// XML-friendly projections:
 		ByPlatformXML []breakdown `json:"-" xml:"by_platform>platform,omitempty"`
 		ByAspectXML   []breakdown `json:"-" xml:"by_aspect>aspect,omitempty"`
@@ -201,67 +210,96 @@ func asTopicEnvelope(a *domain.SourcedAnalysis) any {
 		Aggregate:     a.Aggregate,
 		ByPlatform:    a.ByPlatform,
 		ByAspect:      a.ByAspect,
+		Partial:       a.Partial,
+		Warnings:      a.Warnings,
 		ByPlatformXML: bp,
 		ByAspectXML:   ba,
 	}
 }
 
-// --- content negotiation ----------------------------------------------------
+// --- encoding ---------------------------------------------------------------
 
-// preferredFormat picks between JSON and XML based on Accept (and ?format=).
-// Default is JSON. The same content type is honored for the request body.
-func preferredFormat(req *http.Request) string {
-	if v := req.URL.Query().Get("format"); v != "" {
-		switch strings.ToLower(v) {
-		case "xml":
-			return mimeXML
-		case "json":
-			return mimeJSON
-		}
-	}
-	accept := req.Header.Get("Accept")
-	if accept == "" {
-		return mimeJSON
-	}
-	if strings.Contains(accept, mimeXML) && !strings.Contains(accept, mimeJSON) {
-		return mimeXML
-	}
-	return mimeJSON
-}
-
+// decodeRequest parses a request body as JSON (the default) or XML.
+//
+// YAML is deliberately NOT accepted, even though it is offered for responses.
+// sigs.k8s.io/yaml routes through YAML 1.1, whose implicit typing silently
+// coerces unquoted scalars — measured against these very DTOs, every one of
+// these parses with a nil error and no signal:
+//
+//	topic: no    -> Topic = "false"   (then fans out searching for "false")
+//	text: y      -> Text  = "true"
+//	text: 013    -> Text  = "11"      (octal)
+//	language: no -> Language = "false" ("no" is ISO 639-1 Norwegian)
+//
+// The trap covers every string field, and it is unguardable on `text`
+// specifically: this API scores terse social snippets, where "no", "y", and
+// "on" are not adversarial inputs — they are the corpus. JSON has no
+// equivalent silent-coercion class ({"text": no} is a syntax error, not a
+// boolean). Accepting YAML input is a contract that cannot be withdrawn
+// later; offering YAML output can always be relaxed into it.
 func decodeRequest(req *http.Request, dst any) error {
-	ct := req.Header.Get("Content-Type")
-	switch {
-	case strings.Contains(ct, mimeXML):
-		return xml.NewDecoder(req.Body).Decode(dst)
+	media, _, _ := mime.ParseMediaType(req.Header.Get("Content-Type"))
+	switch canonicalMedia(media) {
+	case mimeXML:
+		if err := xml.NewDecoder(req.Body).Decode(dst); err != nil {
+			return fmt.Errorf("%w: %w", service.ErrInvalidRequest, err)
+		}
+		return nil
+	case mimeYAML:
+		return errYAMLRequestBody
 	default:
 		dec := json.NewDecoder(req.Body)
 		dec.DisallowUnknownFields()
-		return dec.Decode(dst)
+		if err := dec.Decode(dst); err != nil {
+			return fmt.Errorf("%w: %w", service.ErrInvalidRequest, err)
+		}
+		return nil
 	}
 }
 
 func writePayload(w http.ResponseWriter, req *http.Request, status int, payload any) {
-	format := preferredFormat(req)
-	w.Header().Set("Content-Type", format+"; charset=utf-8")
-	w.WriteHeader(status)
-	if format == mimeXML {
-		w.Write([]byte(xml.Header))
-		_ = xml.NewEncoder(w).Encode(payload)
-		return
-	}
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	_ = enc.Encode(payload)
+	writePayloadAs(w, formatFrom(req.Context()), status, payload)
 }
 
-func writeError(w http.ResponseWriter, req *http.Request, status int, err error) {
-	type errResp struct {
-		XMLName xml.Name `json:"-" xml:"error"`
-		Error   string   `json:"error" xml:"message"`
-		Status  int      `json:"status" xml:"status,attr"`
+func writePayloadAs(w http.ResponseWriter, format string, status int, payload any) {
+	w.Header().Set("Content-Type", contentType(format))
+	w.WriteHeader(status)
+	switch format {
+	case mimeXML:
+		_, _ = w.Write([]byte(xml.Header))
+		_ = xml.NewEncoder(w).Encode(payload)
+	case mimeYAML:
+		// sigs.k8s.io/yaml marshals via encoding/json, so it honors the same
+		// `json:` tags and omitempty rules the JSON encoder does. YAML output
+		// is therefore identical in shape to JSON by construction, with no
+		// `yaml:` tags anywhere in the domain types to drift out of sync.
+		if b, err := yaml.Marshal(payload); err == nil {
+			_, _ = w.Write(b)
+		}
+	default:
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(payload)
 	}
+}
+
+type errResp struct {
+	XMLName xml.Name `json:"-" xml:"error"`
+	Error   string   `json:"error" xml:"message"`
+	Status  int      `json:"status" xml:"status,attr"`
+}
+
+// writeError renders err in the negotiated format, with the status its
+// category earns. Handlers pass the error and stay out of the mapping.
+func writeError(w http.ResponseWriter, req *http.Request, err error) {
+	status := httpStatusFor(err)
 	writePayload(w, req, status, errResp{Error: err.Error(), Status: status})
+}
+
+// writeErrorAs is for the paths that run before a format is negotiated — it
+// cannot consult the request context, so the caller names the encoding.
+func writeErrorAs(w http.ResponseWriter, format string, status int, msg string) {
+	writePayloadAs(w, format, status, errResp{Error: msg, Status: status})
 }
 
 // noStore prevents caches from holding API responses (analysis results carry
@@ -284,6 +322,3 @@ func splitAndTrim(s string) []string {
 	}
 	return out
 }
-
-// Compile-time assertion that REST satisfies http.Handler indirectly.
-var _ = fmt.Sprintf

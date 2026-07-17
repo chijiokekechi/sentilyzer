@@ -1,7 +1,7 @@
 # Sentilyzer
 
 A sentiment-analysis API that serves the same business logic over **REST/JSON,
-REST/XML, gRPC, and GraphQL**, and pulls source material from public platforms
+REST/XML, REST/YAML, gRPC, and GraphQL**, and pulls source material from public platforms
 (Hacker News, Reddit, RSS, StockTwits, Mastodon, Twitter/X, YouTube — drop-in
 pluggable).
 
@@ -72,6 +72,11 @@ curl -s -X POST http://localhost:8080/v1/analyze/text \
      -H 'Content-Type: application/xml' -H 'Accept: application/xml' \
      -d '<analyze_text><documents><document><text>terrible service</text></document></documents></analyze_text>'
 
+# YAML out (?format=yaml works too). Requests stay JSON or XML — see below.
+curl -s -X POST http://localhost:8080/v1/analyze/text \
+     -H 'Content-Type: application/json' -H 'Accept: application/yaml' \
+     -d '{"documents":[{"text":"loved it"}]}'
+
 # GraphQL (the response is JSON)
 curl -s http://localhost:8080/graphql \
      -H 'Content-Type: application/json' \
@@ -112,6 +117,22 @@ The framework leaves the slot open: implementing `Connector` for a new
 platform is a single file — see `internal/connectors/hackernews.go` for
 the smallest reference.
 
+## Response formats
+
+Every REST endpoint content-negotiates JSON, XML, and YAML via `Accept`
+(q-values honored) or `?format=json|xml|yaml`. JSON is the default and wins
+ties. An `Accept` we can't satisfy gets a `406`.
+
+**Requests** are JSON or XML only. YAML request bodies are refused with `415`,
+deliberately: YAML 1.1 implicit typing silently coerces unquoted scalars, so
+`topic: no` parses as the *string* `"false"` with no error. That is unguardable
+on a field like `text`, where `"no"` and `"y"` are exactly the kind of terse
+snippet this API exists to score.
+
+**XML is lossy.** `encoding/xml` cannot serialize Go maps, so `probabilities`,
+`label_counts`, and document `metadata` are omitted from XML responses. JSON,
+YAML, and gRPC carry them. Prefer JSON or YAML if you need the distributions.
+
 ## Endpoints
 
 ```
@@ -140,7 +161,6 @@ Key knobs:
 | `SENTILYZER_ML_GENERAL_MODEL`| `cardiffnlp/twitter-roberta-base-…`  | Override the document-level model      |
 | `SENTILYZER_ML_ASPECT_MODEL` | `yangheng/deberta-v3-base-absa-v1.1` | Override the aspect model              |
 | `SENTILYZER_ML_MAX_BATCH`    | `32`                                 | Batch ceiling — **set it on both processes or neither** |
-| `SENTILYZER_DB_DSN`          | `file:sentilyzer.db?…`               | SQLite-compatible DSN; empty = no save |
 | `SENTILYZER_CACHE_TTL`       | `10m`                                | LRU TTL for topic queries              |
 
 ## Development

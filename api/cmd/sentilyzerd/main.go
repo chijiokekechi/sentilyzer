@@ -24,7 +24,6 @@ import (
 	"github.com/chijiokekechi/sentilyzer/api/internal/inference"
 	"github.com/chijiokekechi/sentilyzer/api/internal/server"
 	"github.com/chijiokekechi/sentilyzer/api/internal/service"
-	"github.com/chijiokekechi/sentilyzer/api/internal/store"
 	"github.com/go-chi/chi/v5"
 	"google.golang.org/grpc"
 )
@@ -55,13 +54,6 @@ func main() {
 	}
 	defer infClient.Close()
 
-	st, err := store.Open(cfg.DBDSN)
-	if err != nil {
-		logger.Warn("store unavailable, continuing without persistence", "err", err)
-	} else {
-		defer st.Close()
-	}
-
 	registry := connectors.BuildRegistry(cfg)
 	for _, info := range registry.Info() {
 		logger.Info("connector",
@@ -72,7 +64,7 @@ func main() {
 		)
 	}
 
-	svc, err := service.New(infClient, registry, st, cfg.CacheTTL)
+	svc, err := service.New(infClient, registry, cfg.CacheTTL)
 	if err != nil {
 		logger.Error("service init failed", "err", err)
 		os.Exit(1)

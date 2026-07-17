@@ -5,8 +5,8 @@
 Two long-lived processes communicate over gRPC:
 
 1. **`sentilyzerd`** (Go) is the public gateway. It speaks REST/JSON,
-   REST/XML, gRPC, and GraphQL on top of a single `service.Service` and
-   fans out to platform connectors with goroutines.
+   REST/XML, REST/YAML, gRPC, and GraphQL on top of a single
+   `service.Service` and fans out to platform connectors with goroutines.
 2. **`sentilyzer-ml`** (Python) hosts the inference models. It speaks one
    internal gRPC API: `InferenceService` (`Classify`, `ClassifyAspects`,
    `Ready`).
@@ -24,8 +24,12 @@ the inbound request shape to a `service.Analyze*` call and converts the
 domain result back. Adding a fifth transport (e.g. WebSocket streaming,
 SOAP) means a new adapter file; nothing else changes.
 
-XML and JSON share the **same** REST router; we use HTTP content
-negotiation (Accept / Content-Type / `?format=`) to flip the encoder.
+JSON, XML, and YAML share the **same** REST router; HTTP content
+negotiation (Accept with q-values / `?format=`) flips the encoder.
+YAML marshals through `sigs.k8s.io/yaml`, which routes via `encoding/json`
+and so honors the same `json:` struct tags — YAML and JSON responses are
+identical in shape by construction, with no `yaml:` tags to drift.
+YAML is **output only**; see `server/rest.go:decodeRequest` for why.
 
 ## Why `cardiffnlp/twitter-roberta-base-sentiment-latest`
 
@@ -70,10 +74,24 @@ type Connector interface {
 }
 ```
 
-`service.Service.fanout` runs every selected connector in parallel,
-collects their `SourcedDocument`s, dedupes by `(platform, document_id)`,
-classifies them in a single batched call to the ML worker, then
-aggregates by platform and by aspect.
+Errors are classified once in `server/errors.go` and mapped to both HTTP
+status codes and gRPC codes from that single table, so the two transports
+cannot drift apart on what a given failure means.
+
+`service.Service.fanout` runs every selected connector in parallel under a
+per-connector deadline (`DefaultConnectorTimeout`, 3s), collects their
+`SourcedDocument`s in registry order, dedupes by `(platform, document_id)`,
+classifies them via the ML worker, then aggregates by platform and by aspect.
+
+The deadline is per-connector rather than per-request because fanout waits on
+every goroutine: without it, one slow third-party feed sets the latency of the
+whole call. A connector that misses it is dropped and reported in
+`Warnings`, and the response is flagged `Partial`.
+
+The inference client splits work into batches the worker accepts and
+reassembles them in the caller's order (`inference/batch.go`); the service
+layer never sees the batching. Texts are grouped by length first, because the
+worker pads every text in a batch out to the longest one in it.
 
 Disabled connectors stay registered so `GET /v1/platforms` can show the
 operator *why* (missing API key, instance unset, etc.).
@@ -85,18 +103,28 @@ operator *why* (missing API key, instance unset, etc.).
   defaults to 10 min — long enough to absorb the burst of duplicate
   queries that follows a retry-storm, short enough that a freshly
   trending topic still produces fresh results.
-- **SQLite by default** (`modernc.org/sqlite`, pure Go, no CGO) for
-  durable analysis history. The DSN is portable to libsql/Turso. For
-  Postgres, swap the driver and DSN; the schema is plain SQL.
+- **No durable per-document storage.** An earlier SQLite store wrote one row
+  per analyzed document; it was removed. Nothing ever read the table, and
+  retaining third-party post text indefinitely conflicts with several source
+  platforms' terms (YouTube caps Non-Authorized Data at 30 days and bars
+  derived data; Reddit withholds rights for derived models). The 10-minute
+  in-memory cache is now the only place third-party text lives, which keeps
+  the gateway inside every source's retention rules by construction.
+  See `docs/continuous-training-plan.md` for the audit and the corpus design
+  that replaces it.
 
 ## Failure modes
 
 | Failure                       | Behavior                                                    |
 |-------------------------------|-------------------------------------------------------------|
-| ML worker unreachable         | `/health` reports `ml_reachable=false`; analyses fail closed |
-| Single connector errors       | Logged; other connectors' results are still returned        |
+| ML worker unreachable         | `/health` reports `ml_reachable=false`; analyses return `502` |
+| Single connector errors/times out | Dropped after 3s; others still returned. Response is `partial: true` with a `warnings[]` entry naming it. Partial results are **not** cached |
 | All connectors error          | `AnalyzeTopic` returns `502 Bad Gateway` with the error list |
-| Persistence fails             | Logged warning; request still succeeds                      |
+| No connector enabled at all   | `503 Service Unavailable` — a misconfiguration, not a bad request |
+| Request exceeds 15s           | `504 Gateway Timeout` (`middleware.Timeout`)                |
+| Malformed request             | `400 Bad Request`                                            |
+| YAML request body            | `415 Unsupported Media Type`                                 |
+| Unsatisfiable `Accept`        | `406 Not Acceptable`                                         |
 | HuggingFace download fails    | Operators run with `SENTILYZER_ML_USE_STUB=1` until fixed   |
 
 ## Roadmap
