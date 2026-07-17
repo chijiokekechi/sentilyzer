@@ -139,6 +139,7 @@ Key knobs:
 | `SENTILYZER_ML_USE_STUB`     | `0`                                  | Skip HuggingFace, use heuristic        |
 | `SENTILYZER_ML_GENERAL_MODEL`| `cardiffnlp/twitter-roberta-base-…`  | Override the document-level model      |
 | `SENTILYZER_ML_ASPECT_MODEL` | `yangheng/deberta-v3-base-absa-v1.1` | Override the aspect model              |
+| `SENTILYZER_ML_MAX_BATCH`    | `32`                                 | Batch ceiling — **set it on both processes or neither** |
 | `SENTILYZER_DB_DSN`          | `file:sentilyzer.db?…`               | SQLite-compatible DSN; empty = no save |
 | `SENTILYZER_CACHE_TTL`       | `10m`                                | LRU TTL for topic queries              |
 

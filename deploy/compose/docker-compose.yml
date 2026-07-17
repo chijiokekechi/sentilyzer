@@ -7,6 +7,7 @@ services:
     environment:
       SENTILYZER_ML_DEVICE: cpu
       SENTILYZER_ML_USE_STUB: ${SENTILYZER_ML_USE_STUB:-0}
+      SENTILYZER_ML_MAX_BATCH: ${SENTILYZER_ML_MAX_BATCH:-32}
     ports:
       - "50051:50051"
     volumes:
@@ -26,6 +27,8 @@ services:
       SENTILYZER_HTTP_ADDR: ":8080"
       SENTILYZER_GRPC_ADDR: ":9090"
       SENTILYZER_ML_ADDR: "ml:50051"
+      # Must match the ml service's value above — see .env.example.
+      SENTILYZER_ML_MAX_BATCH: ${SENTILYZER_ML_MAX_BATCH:-32}
       SENTILYZER_USE_MOCK: ${SENTILYZER_USE_MOCK:-true}
       REDDIT_CLIENT_ID: ${REDDIT_CLIENT_ID:-}
       REDDIT_CLIENT_SECRET: ${REDDIT_CLIENT_SECRET:-}

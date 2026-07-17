@@ -48,7 +48,7 @@ func main() {
 		"use_mock", cfg.UseMock,
 	)
 
-	infClient, err := inference.Dial(cfg.MLAddr)
+	infClient, err := inference.Dial(cfg.MLAddr, inference.WithMaxBatch(cfg.MLMaxBatch))
 	if err != nil {
 		logger.Error("inference dial failed", "err", err)
 		os.Exit(1)

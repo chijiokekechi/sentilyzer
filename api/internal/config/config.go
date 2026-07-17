@@ -10,17 +10,18 @@ import (
 )
 
 type Config struct {
-	HTTPAddr  string
-	GRPCAddr  string
-	MLAddr    string
-	UseMock   bool
-	LogLevel  string
-	CacheTTL  time.Duration
-	DBDSN     string
-	Reddit    RedditCreds
-	Twitter   TwitterCreds
-	Mastodon  MastodonCreds
-	YouTube   YouTubeCreds
+	HTTPAddr   string
+	GRPCAddr   string
+	MLAddr     string
+	MLMaxBatch int
+	UseMock    bool
+	LogLevel   string
+	CacheTTL   time.Duration
+	DBDSN      string
+	Reddit     RedditCreds
+	Twitter    TwitterCreds
+	Mastodon   MastodonCreds
+	YouTube    YouTubeCreds
 }
 
 type RedditCreds struct {
@@ -53,9 +54,13 @@ func Load() (*Config, error) {
 		HTTPAddr: getenv("SENTILYZER_HTTP_ADDR", ":8080"),
 		GRPCAddr: getenv("SENTILYZER_GRPC_ADDR", ":9090"),
 		MLAddr:   getenv("SENTILYZER_ML_ADDR", "localhost:50051"),
-		UseMock:  getenvBool("SENTILYZER_USE_MOCK", false),
-		LogLevel: getenv("SENTILYZER_LOG_LEVEL", "info"),
-		DBDSN:    getenv("SENTILYZER_DB_DSN", "file:sentilyzer.db?_pragma=journal_mode(WAL)"),
+		// Read from the same variable the ML worker reads, so a deployment
+		// that sets it once keeps both sides in agreement. The worker
+		// rejects anything above its own value rather than chunking.
+		MLMaxBatch: getenvInt("SENTILYZER_ML_MAX_BATCH", 32),
+		UseMock:    getenvBool("SENTILYZER_USE_MOCK", false),
+		LogLevel:   getenv("SENTILYZER_LOG_LEVEL", "info"),
+		DBDSN:      getenv("SENTILYZER_DB_DSN", "file:sentilyzer.db?_pragma=journal_mode(WAL)"),
 		Reddit: RedditCreds{
 			ClientID:     os.Getenv("REDDIT_CLIENT_ID"),
 			ClientSecret: os.Getenv("REDDIT_CLIENT_SECRET"),
@@ -86,6 +91,18 @@ func getenv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func getenvInt(key string, fallback int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(v)
+	if err != nil || parsed < 1 {
+		return fallback
+	}
+	return parsed
 }
 
 func getenvBool(key string, fallback bool) bool {
