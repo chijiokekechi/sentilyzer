@@ -1,7 +1,6 @@
 # --- build stage ------------------------------------------------------------
 FROM golang:1.25-alpine AS build
 
-RUN apk add --no-cache build-base git
 WORKDIR /src
 
 COPY api/go.mod api/go.sum ./api/
@@ -9,17 +8,19 @@ RUN cd api && go mod download
 
 COPY proto ./proto
 COPY api ./api
-RUN cd api && CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/sentilyzerd ./cmd/sentilyzerd
+# CGO-free: the gateway has no C dependencies (modernc.org/sqlite was the only
+# one, and the store package that used it is gone), so this emits a fully
+# static binary that runs on scratch/distroless with no libc.
+RUN cd api && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/sentilyzerd ./cmd/sentilyzerd
 
 # --- runtime stage ----------------------------------------------------------
-FROM alpine:3.20
-
-RUN apk add --no-cache ca-certificates tzdata && \
-    addgroup -S sentilyzer && adduser -S sentilyzer -G sentilyzer
+# distroless static already ships ca-certificates (the connectors call HTTPS),
+# tzdata, and a non-root user (uid 65532) — no shell, no package manager, no
+# apk/adduser step to maintain.
+FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY --from=build /out/sentilyzerd /usr/local/bin/sentilyzerd
 
-USER sentilyzer
 EXPOSE 8080 9090
 ENV SENTILYZER_HTTP_ADDR=":8080" \
     SENTILYZER_GRPC_ADDR=":9090" \
