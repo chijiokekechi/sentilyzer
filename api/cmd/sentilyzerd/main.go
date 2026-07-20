@@ -11,6 +11,8 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -30,7 +32,41 @@ import (
 
 const Version = "0.1.0"
 
+// runHealthcheck probes the local /livez endpoint and returns a process exit
+// code. It exists so the container HEALTHCHECK can call the binary itself
+// (`sentilyzerd -healthcheck`): the distroless image ships no shell or curl,
+// so a `CMD curl ...` healthcheck cannot run.
+func runHealthcheck() int {
+	addr := os.Getenv("SENTILYZER_HTTP_ADDR")
+	if addr == "" {
+		addr = ":8080"
+	}
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil || port == "" {
+		port = "8080"
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get("http://127.0.0.1:" + port + "/livez")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "healthcheck:", err)
+		return 1
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintln(os.Stderr, "healthcheck: unhealthy status", resp.StatusCode)
+		return 1
+	}
+	return 0
+}
+
 func main() {
+	healthcheck := flag.Bool("healthcheck", false,
+		"probe the local /livez endpoint and exit 0 if healthy, 1 otherwise")
+	flag.Parse()
+	if *healthcheck {
+		os.Exit(runHealthcheck())
+	}
+
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
@@ -70,7 +106,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	rest := &server.REST{Service: svc, Version: Version}
+	rest := &server.REST{
+		Service: svc,
+		Version: Version,
+		RateLimit: server.RateLimitConfig{
+			PerIPPerMinute:  cfg.RateIPPerMin,
+			GlobalPerMinute: cfg.RateGlobalPerMin,
+		},
+	}
 	gql := &server.GraphQL{Service: svc}
 	grpcSrv := &server.GRPC{Service: svc, Version: Version}
 

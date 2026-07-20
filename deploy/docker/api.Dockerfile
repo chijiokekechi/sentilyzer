@@ -26,4 +26,10 @@ ENV SENTILYZER_HTTP_ADDR=":8080" \
     SENTILYZER_GRPC_ADDR=":9090" \
     SENTILYZER_ML_ADDR="ml:50051"
 
+# The binary probes its own /livez — distroless ships no shell or curl, so a
+# `CMD curl ...` healthcheck cannot run here. Liveness is ML-independent, so
+# this restarts only a genuinely wedged gateway, not one waiting on the worker.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD ["/usr/local/bin/sentilyzerd", "-healthcheck"]
+
 ENTRYPOINT ["/usr/local/bin/sentilyzerd"]

@@ -32,8 +32,9 @@ const requestTimeout = 15 * time.Second
 // struct because they share routes, response types, and content negotiation —
 // the only difference is the encoder used to write the response body.
 type REST struct {
-	Service *service.Service
-	Version string
+	Service   *service.Service
+	Version   string
+	RateLimit RateLimitConfig
 }
 
 func (r *REST) Router() http.Handler {
@@ -41,18 +42,60 @@ func (r *REST) Router() http.Handler {
 	rt.Use(middleware.RequestID)
 	rt.Use(middleware.RealIP)
 	rt.Use(middleware.Recoverer)
-	rt.Use(middleware.Timeout(requestTimeout))
-	rt.Use(noStore)
-	rt.Use(negotiateMedia)
 
-	rt.Get("/health", r.handleHealth)
-	rt.Get("/v1/platforms", r.handleListPlatforms)
-	rt.Post("/v1/analyze/text", r.handleAnalyzeText)
-	rt.Post("/v1/analyze/topic", r.handleAnalyzeTopic)
-	// GET form for quick smoke-testing, e.g.
-	//   curl /v1/analyze/topic?topic=Robinhood&platforms=hackernews,rss&limit=5
-	rt.Get("/v1/analyze/topic", r.handleAnalyzeTopicGET)
+	// Liveness and readiness sit OUTSIDE content negotiation, the request
+	// timeout, and rate limiting: a container healthcheck sends no Accept
+	// header and a probe steers by status code, so both must return a plain
+	// 200/503 regardless of the API's negotiation and limiting rules.
+	// /livez is deliberately independent of the ML worker — it answers "is
+	// the gateway process up?", which is what a container restart should key
+	// on (restarting the gateway does not fix an ML outage) — while /readyz
+	// reflects ML reachability, which is what a load balancer should steer on.
+	rt.Get("/livez", handleLivez)
+	rt.Get("/readyz", r.handleReadyz)
+
+	rt.Group(func(gr chi.Router) {
+		gr.Use(middleware.Timeout(requestTimeout))
+		gr.Use(noStore)
+		gr.Use(negotiateMedia)
+		for _, mw := range rateLimiters(r.RateLimit) {
+			gr.Use(mw)
+		}
+
+		gr.Get("/health", r.handleHealth)
+		gr.Get("/v1/platforms", r.handleListPlatforms)
+		gr.Post("/v1/analyze/text", r.handleAnalyzeText)
+		gr.Post("/v1/analyze/topic", r.handleAnalyzeTopic)
+		// GET form for quick smoke-testing, e.g.
+		//   curl /v1/analyze/topic?topic=Robinhood&platforms=hackernews,rss&limit=5
+		gr.Get("/v1/analyze/topic", r.handleAnalyzeTopicGET)
+	})
 	return rt
+}
+
+// handleLivez reports that the gateway process is up and serving HTTP. It does
+// not consult the ML worker: liveness answers "should this container be
+// restarted?", and a restart cannot fix an ML outage — failing it on ML
+// reachability would crash-loop a healthy gateway.
+func handleLivez(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("ok\n"))
+}
+
+// handleReadyz reports whether the service can actually serve analyses — i.e.
+// the ML worker is reachable. A probe steers on this: 200 = send traffic,
+// 503 = don't.
+func (r *REST) handleReadyz(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	info, err := r.Service.Health(req.Context())
+	if err != nil || !info.MLReachable {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte("not ready: ml worker unreachable\n"))
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("ready\n"))
 }
 
 // --- handlers ---------------------------------------------------------------

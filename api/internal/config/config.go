@@ -17,10 +17,13 @@ type Config struct {
 	UseMock    bool
 	LogLevel   string
 	CacheTTL   time.Duration
-	Reddit     RedditCreds
-	Twitter    TwitterCreds
-	Mastodon   MastodonCreds
-	YouTube    YouTubeCreds
+	// Rate limits in requests/minute; 0 disables that limiter.
+	RateIPPerMin     int
+	RateGlobalPerMin int
+	Reddit           RedditCreds
+	Twitter          TwitterCreds
+	Mastodon         MastodonCreds
+	YouTube          YouTubeCreds
 }
 
 type RedditCreds struct {
@@ -56,9 +59,11 @@ func Load() (*Config, error) {
 		// Read from the same variable the ML worker reads, so a deployment
 		// that sets it once keeps both sides in agreement. The worker
 		// rejects anything above its own value rather than chunking.
-		MLMaxBatch: getenvInt("SENTILYZER_ML_MAX_BATCH", 32),
-		UseMock:    getenvBool("SENTILYZER_USE_MOCK", false),
-		LogLevel:   getenv("SENTILYZER_LOG_LEVEL", "info"),
+		MLMaxBatch:       getenvInt("SENTILYZER_ML_MAX_BATCH", 32),
+		UseMock:          getenvBool("SENTILYZER_USE_MOCK", false),
+		LogLevel:         getenv("SENTILYZER_LOG_LEVEL", "info"),
+		RateIPPerMin:     getenvIntNonNeg("SENTILYZER_RATE_IP_RPM", 120),
+		RateGlobalPerMin: getenvIntNonNeg("SENTILYZER_RATE_GLOBAL_RPM", 1200),
 		Reddit: RedditCreds{
 			ClientID:     os.Getenv("REDDIT_CLIENT_ID"),
 			ClientSecret: os.Getenv("REDDIT_CLIENT_SECRET"),
@@ -98,6 +103,20 @@ func getenvInt(key string, fallback int) int {
 	}
 	parsed, err := strconv.Atoi(v)
 	if err != nil || parsed < 1 {
+		return fallback
+	}
+	return parsed
+}
+
+// getenvIntNonNeg reads a non-negative integer (0 is allowed, e.g. to disable
+// a rate limit); returns fallback on an unset, unparseable, or negative value.
+func getenvIntNonNeg(key string, fallback int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(v)
+	if err != nil || parsed < 0 {
 		return fallback
 	}
 	return parsed
