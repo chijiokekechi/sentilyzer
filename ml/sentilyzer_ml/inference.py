@@ -141,7 +141,13 @@ class TransformerBackend:
 
         logger.info("loading general model %s on %s", self.general_model, self.device)
         tok = AutoTokenizer.from_pretrained(self.general_model)
-        mdl = AutoModelForSequenceClassification.from_pretrained(self.general_model)
+        # Pin float32 explicitly. transformers 5's from_pretrained defaults to
+        # dtype="auto", which can silently load a model's fp16/bf16 weights —
+        # slower and less accurate on CPU, and it would corrupt the soft labels
+        # a distilled student learns from.
+        mdl = AutoModelForSequenceClassification.from_pretrained(
+            self.general_model, torch_dtype=torch.float32
+        )
         mdl.eval().to(self.device)
         # Map the model's id2label onto our canonical (negative, neutral, positive)
         # ordering. cardiffnlp uses LABEL_0/1/2 = negative/neutral/positive.
@@ -158,7 +164,10 @@ class TransformerBackend:
 
         logger.info("loading aspect model %s on %s", self.aspect_model, self.device)
         tok = AutoTokenizer.from_pretrained(self.aspect_model)
-        mdl = AutoModelForSequenceClassification.from_pretrained(self.aspect_model)
+        # Pin float32 — see _load_general for why dtype="auto" is unsafe here.
+        mdl = AutoModelForSequenceClassification.from_pretrained(
+            self.aspect_model, torch_dtype=torch.float32
+        )
         mdl.eval().to(self.device)
         id2label = {int(k): v.lower() for k, v in mdl.config.id2label.items()}
         order = self._order_for(id2label)

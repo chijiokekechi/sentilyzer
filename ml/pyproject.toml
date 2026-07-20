@@ -15,7 +15,11 @@ dependencies = [
     "grpcio-tools>=1.66",
     "protobuf>=5.27",
     "numpy>=1.26",
-    "transformers>=4.45",
+    # Cap below 5: transformers 5 changed from_pretrained's dtype default to
+    # "auto", which can silently load fp16/bf16 weights — wrong/slow on CPU and
+    # it corrupts the soft labels a distilled student trains on. inference.py
+    # also passes torch_dtype=torch.float32 explicitly as a belt-and-suspenders.
+    "transformers>=4.45,<5",
     "tokenizers>=0.20",
     "torch>=2.4",
     "scipy>=1.11",
