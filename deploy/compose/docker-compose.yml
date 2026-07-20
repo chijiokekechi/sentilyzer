@@ -13,10 +13,13 @@ services:
     volumes:
       - hf_cache:/cache/huggingface
     healthcheck:
-      test: ["CMD", "python", "-c", "import grpc; grpc.insecure_channel('localhost:50051')"]
-      interval: 10s
+      # Calls Ready() with a deadline. The old probe only constructed a lazy
+      # channel, which always succeeds — a dead worker looked healthy.
+      test: ["CMD", "python", "-m", "sentilyzer_ml.healthcheck"]
+      interval: 15s
       timeout: 5s
       retries: 6
+      start_period: 30s
 
   api:
     build:
