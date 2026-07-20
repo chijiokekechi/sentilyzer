@@ -1,0 +1,20 @@
+# Sentilyzer edge for the single-box Oracle deployment.
+#
+# Caddy is the only service exposed to the internet. It terminates TLS with
+# automatic Let's Encrypt certificates and reverse-proxies to the api container
+# over the internal compose network. SENTILYZER_DOMAIN is injected by compose.
+#
+# Point api.<domain> AND grpc.<domain> A-records at the box before first boot,
+# and keep ports 80 + 443 open (80 is needed for the ACME HTTP-01 challenge).
+
+api.{$SENTILYZER_DOMAIN} {
+	reverse_proxy api:8080
+}
+
+grpc.{$SENTILYZER_DOMAIN} {
+	# grpc-go serves cleartext HTTP/2 (h2c) on :9090. Caddy terminates real
+	# TLS at the edge and forwards over h2c so gRPC's HTTP/2 framing and
+	# trailers survive — a plain reverse_proxy would downgrade to HTTP/1.1
+	# and break gRPC.
+	reverse_proxy h2c://api:9090
+}

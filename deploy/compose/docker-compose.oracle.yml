@@ -1,0 +1,104 @@
+# Single-box production stack for a free Oracle Cloud Always-Free A1 box.
+# See docs/oracle-deployment.md for the full runbook.
+#
+# Caddy is the only service published to the internet (TLS via Let's Encrypt);
+# api and ml stay on the internal network. Self-healing = restart:unless-stopped
+# (crashes) + the autoheal sidecar (containers whose healthcheck goes UNHEALTHY).
+#
+#   Config + secrets come from a root-owned .env (chmod 600) beside this file:
+#     SENTILYZER_DOMAIN=example.com          # required; api.<> + grpc.<> A-records
+#     REDDIT_CLIENT_ID=...  YOUTUBE_API_KEY=...  # optional connector keys
+#   Bring up:  docker compose -f docker-compose.oracle.yml up -d --build
+#
+# First build compiles torch on arm64 (slow but works). Once a GHCR release
+# workflow exists, swap the build: blocks for pinned ghcr.io/... image tags so
+# the box pulls instead of builds.
+
+services:
+  ml:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/ml.Dockerfile
+    image: sentilyzer/ml:prod
+    restart: unless-stopped
+    environment:
+      SENTILYZER_ML_DEVICE: cpu
+      # Real teachers by default — the 12 GB box holds them (Path A). Set to 1
+      # for the lexicon stub if you want a lighter/degraded serving path.
+      SENTILYZER_ML_USE_STUB: ${SENTILYZER_ML_USE_STUB:-0}
+      SENTILYZER_ML_MAX_BATCH: ${SENTILYZER_ML_MAX_BATCH:-32}
+      # 2 OCPU: cap torch threads so it doesn't oversubscribe and wreck p99.
+      OMP_NUM_THREADS: "2"
+    volumes:
+      - hf_cache:/cache/huggingface
+    healthcheck:
+      test: ["CMD", "python", "-m", "sentilyzer_ml.healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 120s # first real-model load is slow on 2 arm cores
+    labels:
+      autoheal: "true"
+
+  api:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/api.Dockerfile
+    image: sentilyzer/api:prod
+    restart: unless-stopped
+    environment:
+      SENTILYZER_HTTP_ADDR: ":8080"
+      SENTILYZER_GRPC_ADDR: ":9090"
+      SENTILYZER_ML_ADDR: "ml:50051"
+      SENTILYZER_ML_MAX_BATCH: ${SENTILYZER_ML_MAX_BATCH:-32}
+      SENTILYZER_USE_MOCK: "false"
+      SENTILYZER_RATE_IP_RPM: ${SENTILYZER_RATE_IP_RPM:-120}
+      SENTILYZER_RATE_GLOBAL_RPM: ${SENTILYZER_RATE_GLOBAL_RPM:-1200}
+      REDDIT_CLIENT_ID: ${REDDIT_CLIENT_ID:-}
+      REDDIT_CLIENT_SECRET: ${REDDIT_CLIENT_SECRET:-}
+      REDDIT_USER_AGENT: ${REDDIT_USER_AGENT:-sentilyzer/0.1}
+      TWITTER_BEARER_TOKEN: ${TWITTER_BEARER_TOKEN:-}
+      MASTODON_INSTANCE: ${MASTODON_INSTANCE:-}
+      MASTODON_ACCESS_TOKEN: ${MASTODON_ACCESS_TOKEN:-}
+      YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
+    # No published ports — Caddy reaches api over the internal network. The
+    # image's HEALTHCHECK (sentilyzerd -healthcheck) drives autoheal.
+    depends_on:
+      ml:
+        condition: service_healthy
+    labels:
+      autoheal: "true"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # :? fails the deploy fast if the domain is unset, rather than issuing a
+      # cert for a bogus hostname.
+      SENTILYZER_DOMAIN: ${SENTILYZER_DOMAIN:?set SENTILYZER_DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_started
+
+  # Restarts any container whose healthcheck goes UNHEALTHY (label autoheal=true).
+  # restart:unless-stopped only covers a crashed/exited container, never a
+  # wedged one that keeps running while failing its healthcheck.
+  autoheal:
+    image: willfarrell/autoheal:latest
+    restart: unless-stopped
+    environment:
+      AUTOHEAL_CONTAINER_LABEL: autoheal
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  hf_cache:
+  caddy_data:
+  caddy_config:
