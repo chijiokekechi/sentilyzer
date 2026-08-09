@@ -109,6 +109,31 @@ SENTILYZER_USE_MOCK=true SENTILYZER_ML_USE_STUB=1 make up
 When a connector lacks credentials, `GET /v1/platforms` reports it as
 disabled with a reason; calls that ask for it are silently skipped.
 
+### Bring your own key
+
+Keyed platforms can also run on a **caller-supplied** key for a single
+request — no server configuration needed. Send the key as a header (REST /
+GraphQL) or as gRPC metadata (same names, lowercased):
+
+| Header                              | Unlocks    |
+|-------------------------------------|------------|
+| `X-Connector-Reddit-Client-Id` + `X-Connector-Reddit-Client-Secret` | `reddit` |
+| `X-Connector-Twitter-Bearer-Token`  | `twitter`  |
+| `X-Connector-Youtube-Api-Key`       | `youtube`  |
+| `X-Connector-Mastodon-Token` (+ optional `X-Connector-Mastodon-Instance`) | `mastodon` |
+
+```bash
+curl -s "http://localhost:8080/v1/analyze/topic?topic=Robinhood&platforms=hackernews,youtube" \
+     -H "X-Connector-Youtube-Api-Key: $MY_YOUTUBE_KEY" | jq .by_platform
+```
+
+Caller keys are used in memory for that one request: never logged, never
+persisted, never echoed into errors. Cached results are isolated per
+credential set (the cache key carries a one-way hash of the keys), so results
+fetched with your key are never served to anyone else. Requests you make with
+your own key run on **your** quota and are subject to the platform's own
+terms. Server-side keys, when configured, remain the fallback.
+
 ### Why no Facebook / Quora / Blind?
 
 Their APIs either don't exist for third parties (Quora, Blind) or have

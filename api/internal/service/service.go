@@ -153,6 +153,11 @@ type AnalyzeTopicRequest struct {
 	Aspects          []string
 	Language         string
 	SinceSeconds     int64
+	// Creds are caller-supplied API keys ("bring your own key"). They enable
+	// keyed connectors the server has no credentials for, for this request
+	// only. Never logged, never persisted; the cache key carries only their
+	// one-way fingerprint.
+	Creds connectors.Credentials
 }
 
 // AnalyzeTopic gathers posts and runs analysis.
@@ -169,7 +174,7 @@ func (s *Service) AnalyzeTopic(ctx context.Context, req AnalyzeTopicRequest) (*d
 		return hit, nil
 	}
 
-	platforms := s.selectPlatforms(req.Platforms)
+	platforms := s.selectPlatforms(req.Platforms, req.Creds)
 	if len(platforms) == 0 {
 		return nil, ErrNoPlatforms
 	}
@@ -275,13 +280,24 @@ func (s *Service) Health(ctx context.Context) (*domain.HealthInfo, error) {
 
 // --- helpers -----------------------------------------------------------------
 
-func (s *Service) selectPlatforms(want []string) []connectors.Connector {
+// usable reports whether a connector can serve this request: enabled by
+// server-side configuration, or unlocked by the caller's own credentials.
+func usable(c connectors.Connector, creds connectors.Credentials) bool {
+	if cc, ok := c.(connectors.CredentialedConnector); ok {
+		enabled, _ := cc.EnabledWith(creds)
+		return enabled
+	}
+	enabled, _ := c.Enabled()
+	return enabled
+}
+
+func (s *Service) selectPlatforms(want []string, creds connectors.Credentials) []connectors.Connector {
 	all := s.Connectors.List()
 	if len(want) == 0 {
-		// Use every enabled connector.
+		// Use every connector this request can run.
 		out := make([]connectors.Connector, 0, len(all))
 		for _, c := range all {
-			if ok, _ := c.Enabled(); ok {
+			if usable(c, creds) {
 				out = append(out, c)
 			}
 		}
@@ -296,7 +312,7 @@ func (s *Service) selectPlatforms(want []string) []connectors.Connector {
 		if _, ok := wanted[strings.ToLower(c.ID())]; !ok {
 			continue
 		}
-		if enabled, _ := c.Enabled(); !enabled {
+		if !usable(c, creds) {
 			continue
 		}
 		out = append(out, c)
@@ -339,6 +355,7 @@ func (s *Service) fanout(
 		Limit:        req.LimitPerPlatform,
 		Language:     req.Language,
 		SinceSeconds: req.SinceSeconds,
+		Creds:        req.Creds,
 	}
 	timeout := s.connectorTimeout()
 
@@ -388,6 +405,12 @@ func buildCacheKey(req AnalyzeTopicRequest) string {
 		fmt.Sprintf("limit=%d", req.LimitPerPlatform),
 		fmt.Sprintf("lang=%s", req.Language),
 		fmt.Sprintf("since=%d", req.SinceSeconds),
+		// Cache isolation between credential sets: a result fetched with one
+		// caller's keys covers platforms another caller cannot see, so the key
+		// must vary with the credentials — as a one-way fingerprint, never the
+		// values themselves. No creds hashes to "" and shares the public key
+		// space, exactly as before.
+		"creds=" + req.Creds.Fingerprint(),
 	}
 	platforms := append([]string{}, req.Platforms...)
 	sort.Strings(platforms)

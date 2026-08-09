@@ -42,6 +42,7 @@ func (r *REST) Router() http.Handler {
 	rt.Use(middleware.RequestID)
 	rt.Use(middleware.RealIP)
 	rt.Use(middleware.Recoverer)
+	rt.Use(WithCredentials)
 
 	// Liveness and readiness sit OUTSIDE content negotiation, the request
 	// timeout, and rate limiting: a container healthcheck sends no Accept
@@ -205,6 +206,7 @@ func (r *REST) runTopic(w http.ResponseWriter, req *http.Request, body analyzeTo
 		Aspects:          body.Aspects,
 		Language:         body.Language,
 		SinceSeconds:     body.SinceSeconds,
+		Creds:            CredsFromContext(req.Context()),
 	})
 	if err != nil {
 		writeError(w, req, err)

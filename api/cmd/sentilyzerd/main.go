@@ -119,7 +119,9 @@ func main() {
 
 	root := chi.NewRouter()
 	root.Mount("/", rest.Router())
-	root.Handle("/graphql", gql.Handler())
+	// The GraphQL handler sits outside the REST router's middleware stack, so
+	// it needs its own caller-credential extraction for BYO-key requests.
+	root.Handle("/graphql", server.WithCredentials(gql.Handler()))
 
 	httpSrv := &http.Server{
 		Addr:              cfg.HTTPAddr,

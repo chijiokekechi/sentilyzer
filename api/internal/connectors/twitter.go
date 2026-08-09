@@ -32,9 +32,25 @@ func (Twitter) ID() string          { return "twitter" }
 func (Twitter) DisplayName() string { return "Twitter / X" }
 func (t *Twitter) Enabled() (bool, string) {
 	if !t.Creds.Enabled() {
-		return false, "missing TWITTER_BEARER_TOKEN"
+		return false, "missing TWITTER_BEARER_TOKEN (or send an X-Connector-Twitter-Bearer-Token header)"
 	}
 	return true, ""
+}
+
+// EnabledWith also accepts a caller-supplied bearer token.
+func (t *Twitter) EnabledWith(creds Credentials) (bool, string) {
+	if creds.TwitterBearerToken != "" {
+		return true, ""
+	}
+	return t.Enabled()
+}
+
+// bearerFor prefers the caller's token for this one request.
+func (t *Twitter) bearerFor(q Query) string {
+	if q.Creds.TwitterBearerToken != "" {
+		return q.Creds.TwitterBearerToken
+	}
+	return t.Creds.BearerToken
 }
 
 type twitterRecentResp struct {
@@ -54,7 +70,7 @@ type twitterRecentResp struct {
 }
 
 func (t *Twitter) Search(ctx context.Context, q Query) ([]domain.SourcedDocument, error) {
-	if ok, _ := t.Enabled(); !ok {
+	if ok, _ := t.EnabledWith(q.Creds); !ok {
 		return nil, nil
 	}
 	if q.Topic == "" {
@@ -86,7 +102,7 @@ func (t *Twitter) Search(ctx context.Context, q Query) ([]domain.SourcedDocument
 	u.RawQuery = v.Encode()
 
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
-	req.Header.Set("Authorization", "Bearer "+t.Creds.BearerToken)
+	req.Header.Set("Authorization", "Bearer "+t.bearerFor(q))
 	resp, err := t.HTTP.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("twitter: %w", err)

@@ -62,6 +62,7 @@ func (g *GRPC) AnalyzeTopic(
 		Aspects:          req.Aspects,
 		Language:         req.Language,
 		SinceSeconds:     req.SinceSeconds,
+		Creds:            credsFromGRPC(ctx),
 	})
 	if err != nil {
 		return nil, status.Error(grpcCodeFor(err), err.Error())

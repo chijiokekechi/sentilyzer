@@ -3,6 +3,7 @@ package connectors
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -31,9 +32,25 @@ func (YouTube) ID() string          { return "youtube" }
 func (YouTube) DisplayName() string { return "YouTube (video titles + descriptions)" }
 func (y *YouTube) Enabled() (bool, string) {
 	if !y.Creds.Enabled() {
-		return false, "missing YOUTUBE_API_KEY"
+		return false, "missing YOUTUBE_API_KEY (or send an X-Connector-Youtube-Api-Key header)"
 	}
 	return true, ""
+}
+
+// EnabledWith also accepts a caller-supplied API key.
+func (y *YouTube) EnabledWith(creds Credentials) (bool, string) {
+	if creds.YouTubeAPIKey != "" {
+		return true, ""
+	}
+	return y.Enabled()
+}
+
+// keyFor prefers the caller's key for this one request.
+func (y *YouTube) keyFor(q Query) string {
+	if q.Creds.YouTubeAPIKey != "" {
+		return q.Creds.YouTubeAPIKey
+	}
+	return y.Creds.APIKey
 }
 
 type youtubeSearchResp struct {
@@ -51,7 +68,7 @@ type youtubeSearchResp struct {
 }
 
 func (y *YouTube) Search(ctx context.Context, q Query) ([]domain.SourcedDocument, error) {
-	if ok, _ := y.Enabled(); !ok {
+	if ok, _ := y.EnabledWith(q.Creds); !ok {
 		return nil, nil
 	}
 	if q.Topic == "" {
@@ -70,7 +87,7 @@ func (y *YouTube) Search(ctx context.Context, q Query) ([]domain.SourcedDocument
 	v.Set("q", q.Topic)
 	v.Set("maxResults", strconv.Itoa(limit))
 	v.Set("type", "video")
-	v.Set("key", y.Creds.APIKey)
+	v.Set("key", y.keyFor(q))
 	if q.SinceSeconds > 0 {
 		published := time.Now().UTC().Add(-time.Duration(q.SinceSeconds) * time.Second)
 		v.Set("publishedAfter", published.Format(time.RFC3339))
@@ -83,6 +100,14 @@ func (y *YouTube) Search(ctx context.Context, q Query) ([]domain.SourcedDocument
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	resp, err := y.HTTP.Do(req)
 	if err != nil {
+		// The API key travels in the URL query string, and a transport-level
+		// *url.Error prints the full URL — which would put the key into an
+		// error that now reaches clients via the response's warnings[]. Strip
+		// the URL and keep only the underlying cause.
+		var uerr *url.Error
+		if errors.As(err, &uerr) {
+			return nil, fmt.Errorf("youtube: %s: %w", uerr.Op, uerr.Err)
+		}
 		return nil, fmt.Errorf("youtube: %w", err)
 	}
 	defer resp.Body.Close()

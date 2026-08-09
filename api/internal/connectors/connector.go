@@ -22,6 +22,10 @@ type Query struct {
 	Limit        int
 	Language     string
 	SinceSeconds int64
+	// Creds are the caller's own API keys, if any. A CredentialedConnector
+	// prefers these over its server-side configuration for the one request;
+	// keyless connectors ignore them.
+	Creds Credentials
 }
 
 // Connector is the contract every platform implements.

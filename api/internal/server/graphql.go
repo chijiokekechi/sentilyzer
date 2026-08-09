@@ -91,8 +91,10 @@ func (g *GraphQL) buildSchema() graphql.Schema {
 	sourcedDocumentType := graphql.NewObject(graphql.ObjectConfig{
 		Name: "SourcedDocument",
 		Fields: graphql.Fields{
-			"id":       &graphql.Field{Type: graphql.String, Resolve: func(p graphql.ResolveParams) (any, error) { return p.Source.(domain.SourcedDocument).Document.ID, nil }},
-			"text":     &graphql.Field{Type: graphql.String, Resolve: func(p graphql.ResolveParams) (any, error) { return p.Source.(domain.SourcedDocument).Document.Text, nil }},
+			"id": &graphql.Field{Type: graphql.String, Resolve: func(p graphql.ResolveParams) (any, error) { return p.Source.(domain.SourcedDocument).Document.ID, nil }},
+			"text": &graphql.Field{Type: graphql.String, Resolve: func(p graphql.ResolveParams) (any, error) {
+				return p.Source.(domain.SourcedDocument).Document.Text, nil
+			}},
 			"platform": &graphql.Field{Type: graphql.NewNonNull(graphql.String)},
 			"url":      &graphql.Field{Type: graphql.String, Resolve: func(p graphql.ResolveParams) (any, error) { return p.Source.(domain.SourcedDocument).URL, nil }},
 			"author":   &graphql.Field{Type: graphql.String},
@@ -203,6 +205,9 @@ func (g *GraphQL) buildSchema() graphql.Schema {
 						Aspects:          getStringListFromArgs(p.Args, "aspects"),
 						Language:         getStringFromArgs(p.Args, "language"),
 						SinceSeconds:     int64(getIntFromArgs(p.Args, "sinceSeconds")),
+						// The GraphQL handler is wrapped by WithCredentials in
+						// main.go, so caller keys arrive on the context.
+						Creds: CredsFromContext(p.Context),
 					}
 					return g.Service.AnalyzeTopic(p.Context, req)
 				},
