@@ -3,7 +3,9 @@ package connectors
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -32,7 +34,7 @@ func (Mastodon) ID() string          { return "mastodon" }
 func (Mastodon) DisplayName() string { return "Mastodon" }
 func (m *Mastodon) Enabled() (bool, string) {
 	if !m.Creds.Enabled() {
-		return false, "missing MASTODON_ACCESS_TOKEN (or send an X-Connector-Mastodon-Token header)"
+		return false, "missing MASTODON_ACCESS_TOKEN (or send an X-Sentilyzer-Mastodon-Token header)"
 	}
 	return true, ""
 }
@@ -46,12 +48,49 @@ func (m *Mastodon) EnabledWith(creds Credentials) (bool, string) {
 	return m.Enabled()
 }
 
-// instanceFor and tokenFor prefer the caller's values for this one request.
-func (m *Mastodon) instanceFor(q Query) string {
+// instanceFor prefers the caller's instance for this one request. A
+// caller-supplied instance is an OUTBOUND FETCH TARGET THE CALLER CONTROLS,
+// so it is validated against SSRF before use: https only, and the host must
+// not resolve to a private, loopback, link-local (cloud metadata lives at
+// 169.254.169.254), or unspecified address. The server-configured instance is
+// the operator's own choice and is not re-validated.
+func (m *Mastodon) instanceFor(ctx context.Context, q Query) (string, error) {
 	if q.Creds.MastodonToken != "" && q.Creds.MastodonInstance != "" {
-		return q.Creds.MastodonInstance
+		if err := validateCallerInstance(ctx, q.Creds.MastodonInstance); err != nil {
+			return "", fmt.Errorf("mastodon instance rejected: %w", err)
+		}
+		return q.Creds.MastodonInstance, nil
 	}
-	return m.Creds.Instance
+	return m.Creds.Instance, nil
+}
+
+// validateCallerInstance rejects instance URLs that would turn the gateway
+// into a proxy for the caller into networks only the gateway can reach.
+// Residual risk: DNS rebinding between this resolution and the actual dial is
+// not closed here; doing so needs a pinning dialer, which is deliberately
+// deferred until BYOK sees real use.
+func validateCallerInstance(ctx context.Context, raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return errors.New("not a valid URL")
+	}
+	if u.Scheme != "https" {
+		return errors.New("must be https")
+	}
+	if u.Hostname() == "" {
+		return errors.New("missing host")
+	}
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, u.Hostname())
+	if err != nil {
+		return fmt.Errorf("host does not resolve: %w", err)
+	}
+	for _, ip := range ips {
+		if ip.IP.IsLoopback() || ip.IP.IsPrivate() || ip.IP.IsLinkLocalUnicast() ||
+			ip.IP.IsLinkLocalMulticast() || ip.IP.IsUnspecified() {
+			return errors.New("host resolves to a non-public address")
+		}
+	}
+	return nil
 }
 
 func (m *Mastodon) tokenFor(q Query) string {
@@ -89,7 +128,11 @@ func (m *Mastodon) Search(ctx context.Context, q Query) ([]domain.SourcedDocumen
 	if limit > 40 {
 		limit = 40
 	}
-	base := strings.TrimRight(m.instanceFor(q), "/") + "/api/v2/search"
+	instance, err := m.instanceFor(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	base := strings.TrimRight(instance, "/") + "/api/v2/search"
 	u, _ := url.Parse(base)
 	v := u.Query()
 	v.Set("q", q.Topic)

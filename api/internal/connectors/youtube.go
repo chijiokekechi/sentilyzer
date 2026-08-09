@@ -32,7 +32,7 @@ func (YouTube) ID() string          { return "youtube" }
 func (YouTube) DisplayName() string { return "YouTube (video titles + descriptions)" }
 func (y *YouTube) Enabled() (bool, string) {
 	if !y.Creds.Enabled() {
-		return false, "missing YOUTUBE_API_KEY (or send an X-Connector-Youtube-Api-Key header)"
+		return false, "missing YOUTUBE_API_KEY (or send an X-Sentilyzer-Youtube-Api-Key header)"
 	}
 	return true, ""
 }

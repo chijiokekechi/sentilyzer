@@ -9,17 +9,23 @@ import (
 // Credentials carries caller-supplied API keys for a single request ("bring
 // your own key"). The zero value means the caller supplied nothing.
 //
+// Only YouTube and Mastodon accept caller keys. Reddit and X/Twitter are
+// deliberately absent: X's Developer Agreement (III.G) flatly bans making
+// tokens or keys available to any third party, and Reddit's Developer Terms
+// (1.4) ban sharing Access Info without Reddit's permission — so accepting
+// those keys would put every caller in breach, with this API as the vector.
+// YouTube's policies permit an agent operating on the key owner's behalf
+// under a written duty of confidentiality, and Mastodon's instance-scoped
+// tokens exist precisely for third-party tools.
+//
 // Lifecycle contract: these values live for the duration of one request and
 // are never persisted, never logged, and never placed in an error message.
 // The only derived value that may outlive the request is Fingerprint(), a
 // one-way hash used to isolate cache entries between callers.
 type Credentials struct {
-	RedditClientID     string
-	RedditClientSecret string
-	TwitterBearerToken string
-	YouTubeAPIKey      string
-	MastodonToken      string
-	MastodonInstance   string
+	YouTubeAPIKey    string
+	MastodonToken    string
+	MastodonInstance string
 }
 
 // IsZero reports whether the caller supplied no credentials at all.
@@ -40,9 +46,6 @@ func (c Credentials) Fingerprint() string {
 	// Field-separated so adjacent values can't collide across boundaries
 	// (e.g. {"ab",""} vs {"a","b"}).
 	sum := sha256.Sum256([]byte(strings.Join([]string{
-		c.RedditClientID,
-		c.RedditClientSecret,
-		c.TwitterBearerToken,
 		c.YouTubeAPIKey,
 		c.MastodonToken,
 		c.MastodonInstance,

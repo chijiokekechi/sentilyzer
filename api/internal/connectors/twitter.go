@@ -32,26 +32,14 @@ func (Twitter) ID() string          { return "twitter" }
 func (Twitter) DisplayName() string { return "Twitter / X" }
 func (t *Twitter) Enabled() (bool, string) {
 	if !t.Creds.Enabled() {
-		return false, "missing TWITTER_BEARER_TOKEN (or send an X-Connector-Twitter-Bearer-Token header)"
+		return false, "missing TWITTER_BEARER_TOKEN"
 	}
 	return true, ""
 }
 
-// EnabledWith also accepts a caller-supplied bearer token.
-func (t *Twitter) EnabledWith(creds Credentials) (bool, string) {
-	if creds.TwitterBearerToken != "" {
-		return true, ""
-	}
-	return t.Enabled()
-}
-
-// bearerFor prefers the caller's token for this one request.
-func (t *Twitter) bearerFor(q Query) string {
-	if q.Creds.TwitterBearerToken != "" {
-		return q.Creds.TwitterBearerToken
-	}
-	return t.Creds.BearerToken
-}
+// Twitter deliberately does NOT accept caller-supplied keys: X's Developer
+// Agreement (III.G) bans making any token, key, or password available to a
+// third party, with no agent exception. Server-side key only.
 
 type twitterRecentResp struct {
 	Data []struct {
@@ -70,7 +58,7 @@ type twitterRecentResp struct {
 }
 
 func (t *Twitter) Search(ctx context.Context, q Query) ([]domain.SourcedDocument, error) {
-	if ok, _ := t.EnabledWith(q.Creds); !ok {
+	if ok, _ := t.Enabled(); !ok {
 		return nil, nil
 	}
 	if q.Topic == "" {
@@ -102,7 +90,7 @@ func (t *Twitter) Search(ctx context.Context, q Query) ([]domain.SourcedDocument
 	u.RawQuery = v.Encode()
 
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
-	req.Header.Set("Authorization", "Bearer "+t.bearerFor(q))
+	req.Header.Set("Authorization", "Bearer "+t.Creds.BearerToken)
 	resp, err := t.HTTP.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("twitter: %w", err)

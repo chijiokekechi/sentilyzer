@@ -135,17 +135,15 @@ func stringContains(haystack, needle string) bool {
 func TestBYOK_GRPCMetadataExtraction(t *testing.T) {
 	md := metadata.New(map[string]string{
 		// gRPC clients send lowercase keys; metadata.New also lowercases.
-		"x-connector-youtube-api-key":      "yt-1",
-		"x-connector-reddit-client-id":     "rid",
-		"x-connector-reddit-client-secret": "rsec",
+		"x-sentilyzer-youtube-api-key":   "yt-1",
+		"x-sentilyzer-mastodon-token":    "mtok",
+		"x-sentilyzer-mastodon-instance": "https://mastodon.example",
 	})
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 	creds := server.CredsFromGRPCForTest(ctx)
-	if creds.YouTubeAPIKey != "yt-1" || creds.RedditClientID != "rid" || creds.RedditClientSecret != "rsec" {
+	if creds.YouTubeAPIKey != "yt-1" || creds.MastodonToken != "mtok" ||
+		creds.MastodonInstance != "https://mastodon.example" {
 		t.Fatalf("extracted %+v", creds)
-	}
-	if creds.TwitterBearerToken != "" {
-		t.Fatal("absent metadata must extract as empty")
 	}
 
 	// No metadata at all: zero value.

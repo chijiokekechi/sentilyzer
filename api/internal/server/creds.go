@@ -13,17 +13,18 @@ import (
 // to run keyed connectors on their own account/quota for a single request;
 // server-side configuration, if present, remains the fallback.
 //
+// Only YouTube and Mastodon are offered: X's Developer Agreement and Reddit's
+// Developer Terms both forbid handing keys to a third party, so there are
+// deliberately no headers for them — see connectors.Credentials.
+//
 // The values are used in memory for the one request and are never logged,
 // never persisted, and never echoed into errors. gRPC callers send the same
 // names as metadata keys (gRPC lowercases them; matching below is
 // case-insensitive either way).
 const (
-	HeaderRedditClientID     = "X-Connector-Reddit-Client-Id"
-	HeaderRedditClientSecret = "X-Connector-Reddit-Client-Secret"
-	HeaderTwitterBearerToken = "X-Connector-Twitter-Bearer-Token"
-	HeaderYouTubeAPIKey      = "X-Connector-Youtube-Api-Key"
-	HeaderMastodonToken      = "X-Connector-Mastodon-Token"
-	HeaderMastodonInstance   = "X-Connector-Mastodon-Instance"
+	HeaderYouTubeAPIKey    = "X-Sentilyzer-Youtube-Api-Key"
+	HeaderMastodonToken    = "X-Sentilyzer-Mastodon-Token"
+	HeaderMastodonInstance = "X-Sentilyzer-Mastodon-Instance"
 )
 
 type credsKey struct{}
@@ -39,12 +40,9 @@ func CredsFromContext(ctx context.Context) connectors.Credentials {
 
 func credsFromHeader(h http.Header) connectors.Credentials {
 	return connectors.Credentials{
-		RedditClientID:     strings.TrimSpace(h.Get(HeaderRedditClientID)),
-		RedditClientSecret: strings.TrimSpace(h.Get(HeaderRedditClientSecret)),
-		TwitterBearerToken: strings.TrimSpace(h.Get(HeaderTwitterBearerToken)),
-		YouTubeAPIKey:      strings.TrimSpace(h.Get(HeaderYouTubeAPIKey)),
-		MastodonToken:      strings.TrimSpace(h.Get(HeaderMastodonToken)),
-		MastodonInstance:   strings.TrimSpace(h.Get(HeaderMastodonInstance)),
+		YouTubeAPIKey:    strings.TrimSpace(h.Get(HeaderYouTubeAPIKey)),
+		MastodonToken:    strings.TrimSpace(h.Get(HeaderMastodonToken)),
+		MastodonInstance: strings.TrimSpace(h.Get(HeaderMastodonInstance)),
 	}
 }
 
@@ -77,11 +75,8 @@ func credsFromGRPC(ctx context.Context) connectors.Credentials {
 		return strings.TrimSpace(vals[0])
 	}
 	return connectors.Credentials{
-		RedditClientID:     get(HeaderRedditClientID),
-		RedditClientSecret: get(HeaderRedditClientSecret),
-		TwitterBearerToken: get(HeaderTwitterBearerToken),
-		YouTubeAPIKey:      get(HeaderYouTubeAPIKey),
-		MastodonToken:      get(HeaderMastodonToken),
-		MastodonInstance:   get(HeaderMastodonInstance),
+		YouTubeAPIKey:    get(HeaderYouTubeAPIKey),
+		MastodonToken:    get(HeaderMastodonToken),
+		MastodonInstance: get(HeaderMastodonInstance),
 	}
 }

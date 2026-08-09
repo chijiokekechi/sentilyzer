@@ -38,19 +38,15 @@ func (*Reddit) ID() string          { return "reddit" }
 func (*Reddit) DisplayName() string { return "Reddit" }
 func (r *Reddit) Enabled() (bool, string) {
 	if !r.Creds.Enabled() {
-		return false, "missing REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET " +
-			"(or send X-Connector-Reddit-Client-Id / -Secret headers)"
+		return false, "missing REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET"
 	}
 	return true, ""
 }
 
-// EnabledWith also accepts caller-supplied Reddit app credentials.
-func (r *Reddit) EnabledWith(creds Credentials) (bool, string) {
-	if creds.RedditClientID != "" && creds.RedditClientSecret != "" {
-		return true, ""
-	}
-	return r.Enabled()
-}
+// Reddit deliberately does NOT accept caller-supplied keys: Reddit's
+// Developer Terms (1.4) ban sharing Access Info with third parties without
+// Reddit's permission, so a caller handing us their client credentials would
+// breach their own agreement. Server-side keys only.
 
 type redditTokenResp struct {
 	AccessToken string `json:"access_token"`
@@ -102,15 +98,9 @@ func (r *Reddit) fetchToken(ctx context.Context, clientID, clientSecret string) 
 	return body.AccessToken, time.Now().Add(time.Duration(body.ExpiresIn) * time.Second), nil
 }
 
-// tokenFor returns a bearer token for the request. Caller-supplied creds get a
-// fresh token every time — deliberately uncached, so nothing derived from a
-// caller's secret outlives their request. Only the server's own credentials
-// use the shared token cache.
-func (r *Reddit) tokenFor(ctx context.Context, q Query) (string, error) {
-	if q.Creds.RedditClientID != "" && q.Creds.RedditClientSecret != "" {
-		token, _, err := r.fetchToken(ctx, q.Creds.RedditClientID, q.Creds.RedditClientSecret)
-		return token, err
-	}
+// tokenFor returns a cached bearer token for the server's app credentials,
+// refreshing it when close to expiry.
+func (r *Reddit) tokenFor(ctx context.Context, _ Query) (string, error) {
 	r.tokenMu.Lock()
 	defer r.tokenMu.Unlock()
 	if r.token != "" && time.Now().Before(r.tokenExp.Add(-30*time.Second)) {
@@ -126,7 +116,7 @@ func (r *Reddit) tokenFor(ctx context.Context, q Query) (string, error) {
 }
 
 func (r *Reddit) Search(ctx context.Context, q Query) ([]domain.SourcedDocument, error) {
-	if ok, _ := r.EnabledWith(q.Creds); !ok {
+	if ok, _ := r.Enabled(); !ok {
 		return nil, nil
 	}
 	if q.Topic == "" {

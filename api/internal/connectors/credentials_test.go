@@ -1,6 +1,7 @@
 package connectors
 
 import (
+	"context"
 	"net/http"
 	"testing"
 
@@ -26,22 +27,44 @@ func TestCredentialsFingerprint(t *testing.T) {
 	}
 
 	// Field-boundary collision: values must not slide between fields.
-	x := Credentials{RedditClientID: "ab", RedditClientSecret: ""}
-	y := Credentials{RedditClientID: "a", RedditClientSecret: "b"}
+	x := Credentials{YouTubeAPIKey: "ab", MastodonToken: ""}
+	y := Credentials{YouTubeAPIKey: "a", MastodonToken: "b"}
 	if x.Fingerprint() == y.Fingerprint() {
 		t.Fatal("field boundaries must be part of the fingerprint")
 	}
 
-	// The fingerprint must never contain a credential value.
-	leak := Credentials{TwitterBearerToken: "super-secret-token"}
+	// The fingerprint must be a fixed-size hash, never the value itself.
+	leak := Credentials{MastodonToken: "super-secret-token"}
 	if got := leak.Fingerprint(); len(got) != 64 {
 		t.Fatalf("fingerprint should be a fixed-size hash, got %q", got)
 	}
 }
 
-// Every keyed connector must (a) implement CredentialedConnector, (b) be
-// unlocked by caller creds without server config, and (c) stay disabled with
-// neither.
+// The BYOK surface is deliberately YouTube + Mastodon only: X's Developer
+// Agreement (III.G) and Reddit's Developer Terms (1.4) forbid handing keys to
+// a third party, so those connectors must NOT implement CredentialedConnector.
+func TestBYOKSurfaceIsExactlyYouTubeAndMastodon(t *testing.T) {
+	client := &http.Client{}
+	var conn Connector
+
+	conn = NewYouTube(client, config.YouTubeCreds{})
+	if _, ok := conn.(CredentialedConnector); !ok {
+		t.Error("youtube should accept caller credentials")
+	}
+	conn = NewMastodon(client, config.MastodonCreds{Instance: "https://mastodon.social"})
+	if _, ok := conn.(CredentialedConnector); !ok {
+		t.Error("mastodon should accept caller credentials")
+	}
+	conn = NewReddit(client, config.RedditCreds{})
+	if _, ok := conn.(CredentialedConnector); ok {
+		t.Error("reddit must NOT accept caller credentials (Developer Terms 1.4)")
+	}
+	conn = NewTwitter(client, config.TwitterCreds{})
+	if _, ok := conn.(CredentialedConnector); ok {
+		t.Error("twitter must NOT accept caller credentials (Developer Agreement III.G)")
+	}
+}
+
 func TestEnabledWith(t *testing.T) {
 	client := &http.Client{}
 	cases := []struct {
@@ -49,10 +72,6 @@ func TestEnabledWith(t *testing.T) {
 		connector CredentialedConnector
 		creds     Credentials
 	}{
-		{"reddit", NewReddit(client, config.RedditCreds{}),
-			Credentials{RedditClientID: "id", RedditClientSecret: "sec"}},
-		{"twitter", NewTwitter(client, config.TwitterCreds{}),
-			Credentials{TwitterBearerToken: "tok"}},
 		{"youtube", NewYouTube(client, config.YouTubeCreds{}),
 			Credentials{YouTubeAPIKey: "key"}},
 		{"mastodon", NewMastodon(client, config.MastodonCreds{Instance: "https://mastodon.social"}),
@@ -73,13 +92,30 @@ func TestEnabledWith(t *testing.T) {
 	}
 }
 
-// Partial Reddit creds (id without secret) must not unlock the connector.
-func TestEnabledWithPartialRedditCreds(t *testing.T) {
-	r := NewReddit(&http.Client{}, config.RedditCreds{})
-	if ok, _ := r.EnabledWith(Credentials{RedditClientID: "id-only"}); ok {
-		t.Fatal("client id without secret must not enable reddit")
+// A caller-supplied Mastodon instance is an outbound fetch target the caller
+// controls; the SSRF guard must reject anything that isn't public https.
+func TestValidateCallerInstance(t *testing.T) {
+	ctx := context.Background()
+	reject := []struct{ name, url string }{
+		{"plain http", "http://mastodon.social"},
+		{"loopback ip", "https://127.0.0.1"},
+		{"loopback name", "https://localhost"},
+		{"private 10.x", "https://10.0.0.8"},
+		{"private 192.168", "https://192.168.1.1:8443"},
+		{"cloud metadata", "https://169.254.169.254"},
+		{"unspecified", "https://0.0.0.0"},
+		{"garbage", "https://"},
+		{"not a url", "::::"},
 	}
-	if ok, _ := r.EnabledWith(Credentials{RedditClientSecret: "secret-only"}); ok {
-		t.Fatal("secret without client id must not enable reddit")
+	for _, tc := range reject {
+		t.Run("reject/"+tc.name, func(t *testing.T) {
+			if err := validateCallerInstance(ctx, tc.url); err == nil {
+				t.Fatalf("%s should be rejected", tc.url)
+			}
+		})
+	}
+	// A currently-nonexistent host must fail closed (does not resolve).
+	if err := validateCallerInstance(ctx, "https://definitely-not-a-real-host.invalid"); err == nil {
+		t.Fatal("unresolvable host should be rejected")
 	}
 }
