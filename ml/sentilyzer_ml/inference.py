@@ -17,8 +17,8 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 import numpy as np
 
@@ -121,6 +121,46 @@ class HeuristicBackend:
         return text[start:end]
 
 
+def resolve_max_length(
+    tokenizer_max: int | None, position_max: int | None, ceiling: int = 512
+) -> int:
+    """The sequence length inference must truncate to.
+
+    Some tokenizers (cardiffnlp's among them) ship without a model_max_length
+    — transformers substitutes a huge sentinel, so `truncation=True` alone
+    silently truncates NOTHING and the first long document overflows the
+    model's position table at runtime. Derive the real limit from the model
+    config instead, reserving 2 positions for the RoBERTa-style pad offset,
+    and never trust a sentinel-sized tokenizer value.
+    """
+    limits = [ceiling]
+    if tokenizer_max and tokenizer_max < 1_000_000:  # sentinel is ~1e30
+        limits.append(tokenizer_max)
+    if position_max:
+        limits.append(max(8, position_max - 2))
+    return min(limits)
+
+
+def _load_fp32(model_name: str):
+    """Load a sequence-classification checkpoint pinned to float32.
+
+    transformers 5 renamed torch_dtype= to dtype= (and made the default
+    "auto", which can silently load fp16 weights); support both spellings so
+    the pin survives either side of the rename.
+    """
+    import torch
+    from transformers import AutoModelForSequenceClassification
+
+    try:
+        return AutoModelForSequenceClassification.from_pretrained(
+            model_name, dtype=torch.float32
+        )
+    except TypeError:  # transformers < the dtype rename
+        return AutoModelForSequenceClassification.from_pretrained(
+            model_name, torch_dtype=torch.float32
+        )
+
+
 class TransformerBackend:
     """HuggingFace-backed implementation. Models load on first call."""
 
@@ -133,45 +173,43 @@ class TransformerBackend:
 
     # ----- lazy loaders -----
 
-    def _load_general(self):
-        if self._general is not None:
-            return self._general
+    def _prepare(self, tok, mdl):
+        """Shared post-load setup: canonical label order + the truncation
+        length the forward pass must enforce."""
         import torch
-        from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-        logger.info("loading general model %s on %s", self.general_model, self.device)
-        tok = AutoTokenizer.from_pretrained(self.general_model)
-        # Pin float32 explicitly. transformers 5's from_pretrained defaults to
-        # dtype="auto", which can silently load a model's fp16/bf16 weights —
-        # slower and less accurate on CPU, and it would corrupt the soft labels
-        # a distilled student learns from.
-        mdl = AutoModelForSequenceClassification.from_pretrained(
-            self.general_model, torch_dtype=torch.float32
-        )
         mdl.eval().to(self.device)
         # Map the model's id2label onto our canonical (negative, neutral, positive)
         # ordering. cardiffnlp uses LABEL_0/1/2 = negative/neutral/positive.
         id2label = {int(k): v.lower() for k, v in mdl.config.id2label.items()}
         order = self._order_for(id2label)
-        self._general = (tok, mdl, order, torch)
+        max_length = resolve_max_length(
+            getattr(tok, "model_max_length", None),
+            getattr(mdl.config, "max_position_embeddings", None),
+        )
+        return (tok, mdl, order, max_length, torch)
+
+    def _load_general(self):
+        if self._general is not None:
+            return self._general
+        from transformers import AutoTokenizer
+
+        logger.info("loading general model %s on %s", self.general_model, self.device)
+        tok = AutoTokenizer.from_pretrained(self.general_model)
+        # Pinned float32: dtype="auto" can silently load fp16/bf16 weights —
+        # slower and less accurate on CPU, and it would corrupt the soft
+        # labels a distilled student learns from.
+        self._general = self._prepare(tok, _load_fp32(self.general_model))
         return self._general
 
     def _load_aspect(self):
         if self._aspect is not None:
             return self._aspect
-        import torch
-        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+        from transformers import AutoTokenizer
 
         logger.info("loading aspect model %s on %s", self.aspect_model, self.device)
         tok = AutoTokenizer.from_pretrained(self.aspect_model)
-        # Pin float32 — see _load_general for why dtype="auto" is unsafe here.
-        mdl = AutoModelForSequenceClassification.from_pretrained(
-            self.aspect_model, torch_dtype=torch.float32
-        )
-        mdl.eval().to(self.device)
-        id2label = {int(k): v.lower() for k, v in mdl.config.id2label.items()}
-        order = self._order_for(id2label)
-        self._aspect = (tok, mdl, order, torch)
+        self._aspect = self._prepare(tok, _load_fp32(self.aspect_model))
         return self._aspect
 
     @staticmethod
@@ -198,11 +236,15 @@ class TransformerBackend:
         texts = list(texts)
         if not texts:
             return []
-        tok, mdl, order, torch = self._load_general()
+        tok, mdl, order, max_length, torch = self._load_general()
         with torch.no_grad():
-            inputs = tok(texts, padding=True, truncation=True, return_tensors="pt").to(
-                self.device
-            )
+            inputs = tok(
+                texts,
+                padding=True,
+                truncation=True,
+                max_length=max_length,
+                return_tensors="pt",
+            ).to(self.device)
             logits = mdl(**inputs).logits
             probs = torch.softmax(logits, dim=-1).cpu().numpy()
         return [Prediction(probabilities=row[order].tolist()) for row in probs]
@@ -224,20 +266,21 @@ class TransformerBackend:
         if not flat_text:
             return [[] for _ in items]
 
-        tok, mdl, order, torch = self._load_aspect()
+        tok, mdl, order, max_length, torch = self._load_aspect()
         with torch.no_grad():
             inputs = tok(
                 flat_text,
                 flat_aspect,
                 padding=True,
                 truncation=True,
+                max_length=max_length,
                 return_tensors="pt",
             ).to(self.device)
             logits = mdl(**inputs).logits
             probs = torch.softmax(logits, dim=-1).cpu().numpy()
 
         out: list[list[tuple[str, Prediction]]] = []
-        for (start, end), (_text, aspects) in zip(spans, items, strict=True):
+        for (start, _end), (_text, aspects) in zip(spans, items, strict=True):
             row = []
             for offset, asp in enumerate(aspects):
                 pred = Prediction(probabilities=probs[start + offset, order].tolist())

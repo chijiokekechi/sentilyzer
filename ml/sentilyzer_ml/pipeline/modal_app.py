@@ -169,8 +169,9 @@ def label(run_id: str) -> dict:
 def train(run_id: str) -> dict:
     import duckdb
     import torch
-    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+    from transformers import AutoTokenizer
 
+    from sentilyzer_ml.inference import _load_fp32
     from sentilyzer_ml.pipeline.export import export_student
     from sentilyzer_ml.pipeline.kd import DistillConfig, build_student_from_teacher, distill
 
@@ -188,10 +189,9 @@ def train(run_id: str) -> dict:
     probs = torch.tensor([[r[1], r[2], r[3]] for r in train_rows], dtype=torch.float32)
 
     # THE COLLAPSE FIREWALL: the student is built from the FROZEN teacher,
-    # fresh, every run. Never from a previous student.
-    teacher = AutoModelForSequenceClassification.from_pretrained(
-        TEACHER_MODEL, torch_dtype=torch.float32
-    )
+    # fresh, every run. Never from a previous student. _load_fp32 pins float32
+    # across the transformers dtype-kwarg rename.
+    teacher = _load_fp32(TEACHER_MODEL)
     student = build_student_from_teacher(teacher, STUDENT_LAYERS)
     tokenizer = AutoTokenizer.from_pretrained(TEACHER_MODEL)
 
