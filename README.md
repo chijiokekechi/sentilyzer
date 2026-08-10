@@ -207,7 +207,20 @@ month costs $0):
 ```bash
 cd ml
 pip install modal && modal setup       # authenticates YOUR Modal account
-modal run sentilyzer_ml/pipeline/modal_app.py     --from-month 2025-06 --output ./student
+modal run --detach sentilyzer_ml/pipeline/modal_app.py::main \
+    --from-month 2025-06 --output ./student
+```
+
+`--detach` keeps the run alive on Modal even if your connection drops
+mid-training (without it, the app's lifetime is tied to your laptop's
+heartbeats). If you do get disconnected, the pipeline finishes anyway —
+pick the artifact up afterwards:
+
+```bash
+modal run sentilyzer_ml/pipeline/modal_app.py::runs      # list finished runs
+modal run sentilyzer_ml/pipeline/modal_app.py::fetch \
+    --run-id "train-XXXXXXXX" --output ./student
+modal run sentilyzer_ml/pipeline/modal_app.py::unlock    # if a dead run stranded the lock
 ```
 
 That one command ingests the freely licensed HackerNews archive into a Modal

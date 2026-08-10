@@ -2,8 +2,11 @@
 
     git clone <repo> && cd sentilyzer/ml
     pip install modal && modal setup          # your Modal account; we never see the key
-    modal run --detach sentilyzer_ml/pipeline/modal_app.py \
+    modal run --detach sentilyzer_ml/pipeline/modal_app.py::main \
         --from-month 2025-06 --output ./student
+
+(::main must be spelled out — this file has several entrypoints, so Modal
+won't guess which one you mean.)
 
 --detach matters: without it the app's lifetime is tied to your laptop's
 heartbeats, so a Wi-Fi blip mid-training kills the run. Detached, the
