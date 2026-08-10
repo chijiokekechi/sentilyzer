@@ -33,3 +33,12 @@ def test_cli_surface():
     assert list(inspect.signature(fn).parameters) == [
         "from_month", "to_month", "limit", "corpus", "output", "skip_ingest",
     ]
+
+
+def test_recovery_entrypoints_exist():
+    """The detached-run workflow: a dropped client must leave the user a way
+    to list runs, fetch artifacts, and clear a stranded lock."""
+    for name in ("unlock", "runs", "fetch"):
+        assert hasattr(m, name), name
+    fetch_fn = m.fetch.info.raw_f
+    assert list(inspect.signature(fetch_fn).parameters) == ["run_id", "output"]

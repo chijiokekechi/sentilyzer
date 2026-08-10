@@ -2,8 +2,17 @@
 
     git clone <repo> && cd sentilyzer/ml
     pip install modal && modal setup          # your Modal account; we never see the key
-    modal run sentilyzer_ml/pipeline/modal_app.py \
+    modal run --detach sentilyzer_ml/pipeline/modal_app.py \
         --from-month 2025-06 --output ./student
+
+--detach matters: without it the app's lifetime is tied to your laptop's
+heartbeats, so a Wi-Fi blip mid-training kills the run. Detached, the
+pipeline finishes on Modal even if your connection drops — then
+    modal run sentilyzer_ml/pipeline/modal_app.py::runs       # list runs
+    modal run sentilyzer_ml/pipeline/modal_app.py::fetch --run-id … --output ./student
+picks the artifact up afterwards. If a dropped client stranded the run lock,
+    modal run sentilyzer_ml/pipeline/modal_app.py::unlock
+clears it.
 
 That single command, entirely on your Modal account (the recurring $30/mo
 credit covers it): ingests the free HackerNews archive into a Modal Volume,
@@ -275,7 +284,15 @@ def run_pipeline() -> dict:
     held = run_lock.get("run", None)
     now = time.time()
     if held and now - held.get("started_at", 0) < LOCK_STALE_SECONDS:
-        return {"skipped": f"run {held['run_id']} already in flight"}
+        age = int(now - held.get("started_at", 0))
+        return {
+            "skipped": f"run {held['run_id']} already in flight ({age}s ago)",
+            "hint": (
+                "if that run is dead (e.g. a disconnected client killed it), "
+                "clear the lock with: modal run "
+                "sentilyzer_ml/pipeline/modal_app.py::unlock"
+            ),
+        }
 
     run_id = time.strftime("train:%Y-%m-%d-%H%M%S", time.gmtime())
     run_lock["run"] = {"run_id": run_id, "started_at": now}
@@ -288,6 +305,25 @@ def run_pipeline() -> dict:
         return summary
     finally:
         run_lock.pop("run", None)
+
+
+@app.function(image=cpu_image, volumes={DATA: volume}, timeout=300)
+def list_runs() -> list[dict]:
+    """All runs on the Volume, newest first — for picking up a detached run."""
+    runs_dir = Path(DATA) / "runs"
+    out = []
+    if runs_dir.is_dir():
+        for run in sorted(runs_dir.iterdir(), reverse=True):
+            eval_path = run / "eval.json"
+            entry = {
+                "run_id": run.name,
+                "has_model": (run / "model" / "model.int8.onnx").is_file(),
+                "gate": None,
+            }
+            if eval_path.is_file():
+                entry["gate"] = json.loads(eval_path.read_text()).get("passed")
+            out.append(entry)
+    return out
 
 
 @app.function(image=cpu_image, volumes={DATA: volume}, timeout=600)
@@ -311,6 +347,39 @@ def trigger() -> dict:
     Proxy-auth keeps this from being a public free-GPU button."""
     call = run_pipeline.spawn()
     return {"spawned": call.object_id}
+
+
+def _download(run_id: str, output: str) -> None:
+    out_dir = Path(output)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    blobs = read_artifact.remote(run_id)
+    if not blobs:
+        raise SystemExit(f"run {run_id!r} has no artifacts on the Volume")
+    for name, blob in blobs.items():
+        (out_dir / name).write_bytes(blob)
+        print(f"wrote {out_dir / name} ({len(blob):,} bytes)")
+
+
+@app.local_entrypoint()
+def unlock():
+    """Clear a stranded run lock (a killed client can leave one behind)."""
+    held = run_lock.pop("run", None)
+    print(f"cleared: {held}" if held else "no lock was held")
+
+
+@app.local_entrypoint()
+def runs():
+    """List runs on the Volume — for fetching after a detached run."""
+    for entry in list_runs.remote():
+        gate = {True: "gate PASSED", False: "gate FAILED", None: "no eval"}[entry["gate"]]
+        model = "model ready" if entry["has_model"] else "no model"
+        print(f"  {entry['run_id']}  {model:12s}  {gate}")
+
+
+@app.local_entrypoint()
+def fetch(run_id: str, output: str = "./student"):
+    """Download a run's artifact — the second half of a detached run."""
+    _download(run_id, output)
 
 
 @app.local_entrypoint()
@@ -339,11 +408,8 @@ def main(
     if "skipped" in summary:
         return
 
+    _download(summary["run_id"], output)
     out_dir = Path(output)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    for name, blob in read_artifact.remote(summary["run_id"]).items():
-        (out_dir / name).write_bytes(blob)
-        print(f"wrote {out_dir / name} ({len(blob):,} bytes)")
     verdict = summary.get("eval", {})
     print(f"\ngate: {'PASSED' if verdict.get('passed') else 'FAILED'} "
           f"(agreement={verdict.get('agreement')})")
