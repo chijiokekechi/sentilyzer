@@ -3,6 +3,7 @@ module github.com/chijiokekechi/sentilyzer/api
 go 1.25.0
 
 require (
+	github.com/coder/websocket v1.8.15
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/go-chi/httprate v0.16.0
 	github.com/graphql-go/graphql v0.8.1

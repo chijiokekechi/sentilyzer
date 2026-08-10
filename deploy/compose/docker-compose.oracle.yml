@@ -87,6 +87,22 @@ services:
       api:
         condition: service_started
 
+  # Corpus harvester (docs/corpus-policy.md): streams the Bluesky firehose
+  # into the training corpus with DID provenance + delete tombstones. Opt-in:
+  #   docker compose --profile harvest -f docker-compose.oracle.yml up -d
+  harvester:
+    image: sentilyzer/api:prod
+    restart: unless-stopped
+    profiles: ["harvest"]
+    entrypoint: ["/usr/local/bin/sentilyzer-harvest"]
+    command:
+      - "-out=/corpus"
+      - "-langs=${SENTILYZER_HARVEST_LANGS:-en}"
+      - "-sample=${SENTILYZER_HARVEST_SAMPLE:-0.05}"
+      - "-min-chars=40"
+    volumes:
+      - corpus:/corpus
+
   # Restarts any container whose healthcheck goes UNHEALTHY (label autoheal=true).
   # restart:unless-stopped only covers a crashed/exited container, never a
   # wedged one that keeps running while failing its healthcheck.
@@ -102,3 +118,4 @@ volumes:
   hf_cache:
   caddy_data:
   caddy_config:
+  corpus:

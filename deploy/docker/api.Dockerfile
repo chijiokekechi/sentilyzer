@@ -11,7 +11,8 @@ COPY api ./api
 # CGO-free: the gateway has no C dependencies (modernc.org/sqlite was the only
 # one, and the store package that used it is gone), so this emits a fully
 # static binary that runs on scratch/distroless with no libc.
-RUN cd api && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/sentilyzerd ./cmd/sentilyzerd
+RUN cd api && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/sentilyzerd ./cmd/sentilyzerd && \
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/sentilyzer-harvest ./cmd/sentilyzer-harvest
 
 # --- runtime stage ----------------------------------------------------------
 # distroless static already ships ca-certificates (the connectors call HTTPS),
@@ -20,6 +21,7 @@ RUN cd api && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/sentilyz
 FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY --from=build /out/sentilyzerd /usr/local/bin/sentilyzerd
+COPY --from=build /out/sentilyzer-harvest /usr/local/bin/sentilyzer-harvest
 
 EXPOSE 8080 9090
 ENV SENTILYZER_HTTP_ADDR=":8080" \
