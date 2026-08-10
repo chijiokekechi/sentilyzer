@@ -35,8 +35,19 @@ def label_training_set(
     *,
     batch_size: int = 32,
     teacher_version: str = TEACHER_VERSION,
+    flush_every: int = 50_000,
+    checkpoint=None,  # () -> None, fired after each flush lands on disk
 ) -> LabelStats:
-    """Label unlabeled rows of train_parquet into labels_parquet (append)."""
+    """Label unlabeled rows of train_parquet into labels_parquet (append).
+
+    Labels land on disk every ``flush_every`` rows, and ``checkpoint`` fires
+    after each flush (the Modal caller commits the Volume there) — so a
+    timeout or preemption loses at most one flush window, and the retry
+    relabels only what never flushed. Work is ordered by text length: the
+    teacher pads each batch to its longest member, so batching
+    similar-length texts together stops short texts burning compute on
+    padding.
+    """
     import duckdb
 
     train_parquet = str(train_parquet)
@@ -61,26 +72,20 @@ def label_training_set(
 
     stats = LabelStats()
     stats.total_rows = con.sql("SELECT count(*) FROM train").fetchone()[0]
-    todo = con.sql("""
-        SELECT t.platform, t.doc_id, t.text FROM train t
+    # Materialized, not streamed: each flush rewrites labels_parquet, and the
+    # existing-labels view reads from it — nothing may lazily scan that file
+    # once labeling starts.
+    con.sql("""
+        CREATE TABLE todo AS
+        SELECT row_number() OVER (ORDER BY length(t.text), t.platform, t.doc_id) AS rn,
+               t.platform, t.doc_id, t.text
+        FROM train t
         ANTI JOIN existing e USING (platform, doc_id)
-        ORDER BY t.platform, t.doc_id
-    """).fetchall()
-    stats.already_labeled = stats.total_rows - len(todo)
-    if not todo:
+    """)
+    n_todo = con.sql("SELECT count(*) FROM todo").fetchone()[0]
+    stats.already_labeled = stats.total_rows - n_todo
+    if not n_todo:
         return stats
-
-    rows: list[tuple[str, str, float, float, float, str]] = []
-    for start in range(0, len(todo), batch_size):
-        chunk = todo[start : start + batch_size]
-        preds = backend.classify([r[2] for r in chunk])
-        if len(preds) != len(chunk):
-            raise RuntimeError(
-                f"teacher returned {len(preds)} predictions for {len(chunk)} texts"
-            )
-        for (platform, doc_id, _), pred in zip(chunk, preds, strict=True):
-            p = pred.probabilities  # canonical (neg, neu, pos) per inference.py
-            rows.append((platform, doc_id, float(p[0]), float(p[1]), float(p[2]), teacher_version))
 
     labels_path.parent.mkdir(parents=True, exist_ok=True)
     con.sql("""
@@ -90,17 +95,41 @@ def label_training_set(
             teacher_version VARCHAR
         )
     """)
-    con.executemany("INSERT INTO new_labels VALUES (?, ?, ?, ?, ?, ?)", rows)
-    if labels_path.exists():
-        con.sql(f"""
-            COPY (
-                SELECT * FROM read_parquet('{labels_path}')
-                UNION ALL SELECT * FROM new_labels
-            ) TO '{labels_path}.new' (FORMAT parquet)
-        """)
-        Path(f"{labels_path}.new").replace(labels_path)
-    else:
-        con.sql(f"COPY new_labels TO '{labels_path}' (FORMAT parquet)")
 
-    stats.newly_labeled = len(rows)
+    def flush(rows: list[tuple[str, str, float, float, float, str]]) -> None:
+        con.executemany("INSERT INTO new_labels VALUES (?, ?, ?, ?, ?, ?)", rows)
+        if labels_path.exists():
+            con.sql(f"""
+                COPY (
+                    SELECT * FROM read_parquet('{labels_path}')
+                    UNION ALL SELECT * FROM new_labels
+                ) TO '{labels_path}.new' (FORMAT parquet)
+            """)
+            Path(f"{labels_path}.new").replace(labels_path)
+        else:
+            con.sql(f"COPY new_labels TO '{labels_path}' (FORMAT parquet)")
+        con.sql("DELETE FROM new_labels")
+        stats.newly_labeled += len(rows)
+        if checkpoint is not None:
+            checkpoint()
+
+    for window_start in range(1, n_todo + 1, flush_every):
+        window = con.sql(f"""
+            SELECT platform, doc_id, text FROM todo
+            WHERE rn BETWEEN {window_start} AND {window_start + flush_every - 1}
+            ORDER BY rn
+        """).fetchall()
+        rows: list[tuple[str, str, float, float, float, str]] = []
+        for start in range(0, len(window), batch_size):
+            chunk = window[start : start + batch_size]
+            preds = backend.classify([r[2] for r in chunk])
+            if len(preds) != len(chunk):
+                raise RuntimeError(
+                    f"teacher returned {len(preds)} predictions for {len(chunk)} texts"
+                )
+            for (platform, doc_id, _), pred in zip(chunk, preds, strict=True):
+                p = pred.probabilities  # canonical (neg, neu, pos) per inference.py
+                rows.append((platform, doc_id, float(p[0]), float(p[1]), float(p[2]), teacher_version))
+        flush(rows)
+
     return stats

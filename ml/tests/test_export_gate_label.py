@@ -190,6 +190,48 @@ def test_labeling_is_incremental(tmp_path):
     assert rows[2] == pytest.approx(1.0, abs=1e-5)
 
 
+class DyingTeacher(FakeTeacher):
+    """Labels normally, then dies — a timeout/preemption stand-in."""
+
+    def __init__(self, batches_before_death: int):
+        super().__init__()
+        self.batches_before_death = batches_before_death
+
+    def classify(self, texts):
+        if self.calls >= self.batches_before_death:
+            raise RuntimeError("killed")
+        return super().classify(texts)
+
+
+def test_labeling_flushes_survive_a_kill(tmp_path):
+    """A kill mid-labeling loses at most one flush window: whatever flushed
+    stays on disk (checkpoint fired), and the retry labels only the rest."""
+    train = tmp_path / "train.parquet"
+    labels = tmp_path / "labels.parquet"
+    write_train_parquet(train, 20)
+
+    commits: list[int] = []
+    # batch 4, flush window 8: window 1 = batches 1-2, then die in window 2.
+    with pytest.raises(RuntimeError, match="killed"):
+        label_training_set(
+            train, labels, DyingTeacher(batches_before_death=3),
+            batch_size=4, flush_every=8, checkpoint=lambda: commits.append(1),
+        )
+    assert commits == [1]  # exactly the surviving window was committed
+    on_disk = duckdb.sql(f"SELECT count(*) FROM read_parquet('{labels}')").fetchone()[0]
+    assert on_disk == 8
+
+    stats = label_training_set(
+        train, labels, FakeTeacher(),
+        batch_size=4, flush_every=8, checkpoint=lambda: commits.append(1),
+    )
+    assert (stats.already_labeled, stats.newly_labeled) == (8, 12)
+    final = duckdb.sql(f"""
+        SELECT count(*), count(DISTINCT doc_id) FROM read_parquet('{labels}')
+    """).fetchone()
+    assert final == (20, 20)  # complete, and nothing double-labeled
+
+
 # --- promotion pointer compatibility ----------------------------------------
 
 

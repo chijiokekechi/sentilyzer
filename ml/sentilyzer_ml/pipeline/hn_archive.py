@@ -60,7 +60,12 @@ def last_full_month() -> str:
 
 
 def month_done(out_root: Path, month: str) -> bool:
-    """A month is done when any dt= partition holds its backfill part file."""
+    """A month is done when any dt= partition holds its backfill part file.
+
+    Limited ingests write ``.partial`` part files, which deliberately do NOT
+    match here — an unlimited run re-ingests the month in full (replacing the
+    partial files) instead of trusting a truncated smoke ingest as complete.
+    """
     return any(out_root.glob(f"documents/dt=*/platform=hackernews/part-backfill-{month}.jsonl.gz"))
 
 
@@ -84,6 +89,15 @@ def backfill_month(con, month: str, out_root: Path, min_chars: int, max_chars: i
     """
     if limit:
         q += f" LIMIT {limit}"
+
+    # A limited ingest is a smoke run: mark its part files .partial so
+    # month_done() never mistakes them for a complete month, and drop any
+    # stale partials so re-ingestion can't mix truncated and full data.
+    for stale in out_root.glob(
+        f"documents/dt=*/platform=hackernews/part-backfill-{month}.partial.jsonl.gz"
+    ):
+        stale.unlink()
+    suffix = ".partial" if limit else ""
 
     # Group output rows by the item's own UTC date to match the dt= layout.
     by_date: dict[str, list[dict]] = {}
@@ -109,7 +123,7 @@ def backfill_month(con, month: str, out_root: Path, min_chars: int, max_chars: i
     for date, rows in sorted(by_date.items()):
         part_dir = out_root / "documents" / f"dt={date}" / "platform=hackernews"
         part_dir.mkdir(parents=True, exist_ok=True)
-        path = part_dir / f"part-backfill-{month}.jsonl.gz"
+        path = part_dir / f"part-backfill-{month}{suffix}.jsonl.gz"
         with gzip.open(path, "wt", encoding="utf-8") as f:
             for row in rows:
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
@@ -125,8 +139,14 @@ def ingest_months(
     max_chars: int = 2000,
     limit: int | None = None,
     log=print,
+    checkpoint=None,  # () -> None, fired after each month lands on disk
 ) -> int:
-    """Ingest a month range, resumably (skips months already present)."""
+    """Ingest a month range, resumably (skips months already present).
+
+    ``checkpoint`` fires after each successfully ingested month — the Modal
+    caller commits the Volume there, so a timeout partway through a long
+    range keeps the finished months instead of losing them all.
+    """
     import duckdb
 
     to_month = to_month or last_full_month()
@@ -144,4 +164,6 @@ def ingest_months(
             continue
         total += kept
         log(f"{month}: {kept} documents")
+        if checkpoint is not None:
+            checkpoint()
     return total

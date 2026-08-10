@@ -120,6 +120,7 @@ def ingest_hn(from_month: str, to_month: str = "", limit: int = 0) -> dict:
         from_month,
         to_month or None,
         limit=limit or None,
+        checkpoint=volume.commit,  # a timeout keeps the finished months
     )
     volume.commit()
     return {"ingested": total}
@@ -150,7 +151,7 @@ def prep(run_id: str) -> dict:
 
 @app.function(
     image=gpu_image, gpu="T4", volumes={DATA: volume},
-    timeout=7200, retries=0,
+    timeout=7200, retries=0, memory=4096,
 )
 def label(run_id: str) -> dict:
     import torch
@@ -168,6 +169,12 @@ def label(run_id: str) -> dict:
         run_dir / "train.parquet",
         Path(DATA) / "labels" / "labels.parquet",  # shared across runs: incremental
         backend,
+        # T4-sized batches, and a Volume commit every flush window: at the
+        # full sequence cap labeling runs long, and a timeout must cost at
+        # most one window of work, not the whole pass.
+        batch_size=128,
+        flush_every=50_000,
+        checkpoint=volume.commit,
     )
     volume.commit()
     return {"total": stats.total_rows, "already": stats.already_labeled, "new": stats.newly_labeled}
@@ -177,6 +184,7 @@ def label(run_id: str) -> dict:
     image=gpu_image, gpu="A10", volumes={DATA: volume},
     timeout=MAX_TRAIN_SECONDS + 300,  # headroom so OUR budget stops us, never Modal's
     retries=0, max_containers=1,
+    memory=8192,  # the capped training set is held in RAM as Python strings
 )
 def train(run_id: str) -> dict:
     import duckdb
