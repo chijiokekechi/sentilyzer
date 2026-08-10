@@ -82,6 +82,23 @@ app = modal.App(APP_NAME)
 volume = modal.Volume.from_name("sentilyzer-train", create_if_missing=True)
 run_lock = modal.Dict.from_name("sentilyzer-train-lock", create_if_missing=True)
 
+
+def lock_decision(held: dict | None, now: float, input_id: str | None) -> tuple[str, str | None]:
+    """What run_pipeline should do given the current lock state.
+
+    Returns ("fresh", None), ("resume", run_id), or ("skip", reason).
+    A held lock whose input_id matches ours is OUR OWN previous life — the
+    orchestrator was preempted and Modal restarted the same input — so the
+    run resumes rather than refusing itself (which stranded a healthy run
+    once: train finished as an orphan while the restart reported skipped).
+    """
+    if not held or now - held.get("started_at", 0) >= LOCK_STALE_SECONDS:
+        return ("fresh", None)
+    if input_id is not None and held.get("input_id") == input_id:
+        return ("resume", held["run_id"])
+    age = int(now - held.get("started_at", 0))
+    return ("skip", f"run {held['run_id']} already in flight ({age}s ago)")
+
 DATA = "/data"
 
 cpu_image = (
@@ -135,6 +152,12 @@ def prep(run_id: str) -> dict:
     volume.reload()
     corpus = Path(DATA) / "corpus"
     out = Path(DATA) / "runs" / run_id / "train.parquet"
+    manifest = Path(f"{out}.manifest.json")
+    if out.exists() and manifest.exists():
+        # A resumed orchestrator re-runs the stage sequence; this run's
+        # training set is already built and committed, so hand back its
+        # manifest instead of rebuilding.
+        return {"reused": True, **json.loads(manifest.read_text())}
     stats = build_training_set(
         PrepConfig(
             corpus_root=str(corpus),
@@ -316,21 +339,31 @@ def evaluate(run_id: str) -> dict:
 def run_pipeline() -> dict:
     """Orchestrates one run: lock → prep → label → train → evaluate.
     Returns everything it decided."""
-    held = run_lock.get("run", None)
-    now = time.time()
-    if held and now - held.get("started_at", 0) < LOCK_STALE_SECONDS:
-        age = int(now - held.get("started_at", 0))
+    decision, arg = lock_decision(
+        run_lock.get("run", None), time.time(), modal.current_input_id()
+    )
+    if decision == "skip":
         return {
-            "skipped": f"run {held['run_id']} already in flight ({age}s ago)",
+            "skipped": arg,
             "hint": (
                 "if that run is dead (e.g. a disconnected client killed it), "
                 "clear the lock with: modal run "
                 "sentilyzer_ml/pipeline/modal_app.py::unlock"
             ),
         }
-
-    run_id = time.strftime("train:%Y-%m-%d-%H%M%S", time.gmtime())
-    run_lock["run"] = {"run_id": run_id, "started_at": now}
+    if decision == "resume":
+        # This orchestrator was preempted and restarted with the same input.
+        # Keep the run_id; every stage fast-forwards (prep returns its
+        # manifest, labels are incremental, train resumes its checkpoint).
+        run_id = arg
+        print(f"orchestrator restarted; resuming {run_id}")
+    else:
+        run_id = time.strftime("train:%Y-%m-%d-%H%M%S", time.gmtime())
+        run_lock["run"] = {
+            "run_id": run_id,
+            "started_at": time.time(),
+            "input_id": modal.current_input_id(),
+        }
     try:
         summary: dict = {"run_id": run_id}
         summary["prep"] = prep.remote(run_id)
