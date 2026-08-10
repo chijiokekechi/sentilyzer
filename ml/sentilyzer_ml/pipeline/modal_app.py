@@ -126,7 +126,7 @@ def ingest_hn(from_month: str, to_month: str = "", limit: int = 0) -> dict:
     return {"ingested": total}
 
 
-@app.function(image=cpu_image, volumes={DATA: volume}, timeout=1800)
+@app.function(image=cpu_image, volumes={DATA: volume}, timeout=1800, memory=8192)
 def prep(run_id: str) -> dict:
     from sentilyzer_ml.pipeline.prep import PrepConfig, build_training_set
 
