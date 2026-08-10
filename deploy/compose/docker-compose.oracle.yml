@@ -29,6 +29,15 @@ services:
       SENTILYZER_ML_MAX_BATCH: ${SENTILYZER_ML_MAX_BATCH:-32}
       # 2 OCPU: cap torch threads so it doesn't oversubscribe and wreck p99.
       OMP_NUM_THREADS: "2"
+      # Model store (Path B): set bucket+endpoint+read-only R2 keys and the
+      # worker serves the promoted student, hot-swapping on promotion. All
+      # empty = teacher-only serving (Path A), no polling.
+      SENTILYZER_ML_MODEL_BUCKET: ${SENTILYZER_ML_MODEL_BUCKET:-}
+      SENTILYZER_ML_MODEL_ENDPOINT: ${SENTILYZER_ML_MODEL_ENDPOINT:-}
+      SENTILYZER_ML_MODEL_CACHE: /cache/models
+      SENTILYZER_ML_ORT_THREADS: "2"
+      AWS_ACCESS_KEY_ID: ${R2_READ_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${R2_READ_SECRET_ACCESS_KEY:-}
     volumes:
       - hf_cache:/cache/huggingface
     healthcheck:

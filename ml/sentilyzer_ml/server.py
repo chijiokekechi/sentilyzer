@@ -14,14 +14,14 @@ from concurrent import futures
 
 import grpc
 
-from . import config as cfg
-from . import inference as inf
-
 # Generated proto modules use absolute imports rooted at `sentilyzer.v1.*`;
 # our package's __init__.py prepends gen/ to sys.path so that resolves.
 from sentilyzer.v1 import inference_pb2 as ipb  # noqa: E402
 from sentilyzer.v1 import inference_pb2_grpc as igrpc  # noqa: E402
 from sentilyzer.v1 import sentilyzer_pb2 as spb  # noqa: E402
+
+from . import config as cfg
+from . import inference as inf
 
 logger = logging.getLogger("sentilyzer_ml.server")
 
@@ -87,14 +87,18 @@ class InferenceServicer(igrpc.InferenceServiceServicer):
         return out
 
     def Ready(self, request: ipb.ReadyRequest, context):  # noqa: N802
+        general = self.config.general_model if not self.config.use_stub else "stub-heuristic"
+        aspect = self.config.aspect_model if not self.config.use_stub else "stub-heuristic"
+        # When a promoted student is answering doc-level requests, say so —
+        # this is how the serving box (and a promotion drill) confirms which
+        # run is actually live.
+        served = getattr(self.backend, "served_run_id", None)
+        if callable(served) and (run_id := served()):
+            general = f"student:{run_id} (fallback {general})"
         return ipb.ReadyResponse(
             ready=True,
-            general_model=self.config.general_model
-            if not self.config.use_stub
-            else "stub-heuristic",
-            aspect_model=self.config.aspect_model
-            if not self.config.use_stub
-            else "stub-heuristic",
+            general_model=general,
+            aspect_model=aspect,
             device=self.config.device,
         )
 
@@ -110,6 +114,26 @@ def serve(config: cfg.Config | None = None) -> grpc.Server:
         aspect_model=config.aspect_model,
         device=config.device,
     )
+    if config.model_bucket and config.model_endpoint:
+        # Serve the promoted student when one exists, hot-swapping as the
+        # trainer promotes new runs; the backend above remains the fallback
+        # (and always answers aspect requests — see ManagedBackend).
+        from .model_store import ModelManager, S3ArtifactStore
+        from .onnx_backend import ManagedBackend, OnnxBackend
+
+        manager = ModelManager(
+            S3ArtifactStore(config.model_bucket, endpoint_url=config.model_endpoint),
+            lambda d: OnnxBackend(d, intra_op_threads=config.ort_threads),
+            cache_dir=config.model_cache,
+        )
+        manager.refresh()  # pick up the current student before first request
+        manager.start_polling(config.model_poll_seconds)
+        backend = ManagedBackend(backend, manager)
+        logger.info(
+            "model store enabled (bucket=%s, serving=%s)",
+            config.model_bucket,
+            manager.run_id or "fallback (no promoted student yet)",
+        )
     server = grpc.server(
         futures.ThreadPoolExecutor(max_workers=4),
         options=[

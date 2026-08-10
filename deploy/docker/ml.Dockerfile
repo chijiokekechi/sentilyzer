@@ -25,7 +25,7 @@ RUN pip install grpcio-tools && \
         --python_out=ml/sentilyzer_ml/gen \
         --grpc_python_out=ml/sentilyzer_ml/gen \
         proto/sentilyzer/v1/sentilyzer.proto proto/sentilyzer/v1/inference.proto && \
-    pip install ./ml
+    pip install "./ml[serve]"
 
 # Pre-create the cache dir; models are downloaded on first call.
 RUN mkdir -p /cache/huggingface && chmod 0777 /cache/huggingface
