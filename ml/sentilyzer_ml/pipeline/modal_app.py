@@ -151,7 +151,7 @@ def prep(run_id: str) -> dict:
 
 @app.function(
     image=gpu_image, gpu="T4", volumes={DATA: volume},
-    timeout=7200, retries=0, memory=4096,
+    timeout=4 * 3600, retries=0, memory=4096,
 )
 def label(run_id: str) -> dict:
     import torch
@@ -172,7 +172,7 @@ def label(run_id: str) -> dict:
         # T4-sized batches, and a Volume commit every flush window: at the
         # full sequence cap labeling runs long, and a timeout must cost at
         # most one window of work, not the whole pass.
-        batch_size=128,
+        batch_size=256,
         flush_every=50_000,
         checkpoint=volume.commit,
     )
@@ -288,7 +288,7 @@ def evaluate(run_id: str) -> dict:
     return out
 
 
-@app.function(image=cpu_image, timeout=4 * 3600)
+@app.function(image=cpu_image, timeout=8 * 3600)
 def run_pipeline() -> dict:
     """Orchestrates one run: lock → prep → label → train → evaluate.
     Returns everything it decided."""
@@ -310,7 +310,14 @@ def run_pipeline() -> dict:
     try:
         summary: dict = {"run_id": run_id}
         summary["prep"] = prep.remote(run_id)
-        summary["label"] = label.remote(run_id)
+        # Labeling flushes its progress every window, so a timeout retry is
+        # monotonic — it relabels only what never flushed. One retry bounds
+        # the worst-case GPU bill while letting a near-miss finish the pass.
+        try:
+            summary["label"] = label.remote(run_id)
+        except modal.exception.FunctionTimeoutError:
+            print("label hit its timeout; retrying from flushed progress")
+            summary["label"] = label.remote(run_id)
         summary["train"] = train.remote(run_id)
         summary["eval"] = evaluate.remote(run_id)
         return summary
