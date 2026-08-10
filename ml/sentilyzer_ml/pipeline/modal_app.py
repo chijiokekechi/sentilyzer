@@ -1,29 +1,38 @@
-"""Modal app: ON-DEMAND distillation runs. No mandatory cron anywhere.
+"""Train a Sentilyzer student on YOUR Modal account — clone and run.
 
-    modal deploy ml/sentilyzer_ml/pipeline/modal_app.py     # once
-    modal run ml/sentilyzer_ml/pipeline/modal_app.py        # trigger a run
-    curl -X POST <trigger-url>                               # or over HTTP
+    git clone <repo> && cd sentilyzer/ml
+    pip install modal && modal setup          # your Modal account; we never see the key
+    modal run sentilyzer_ml/pipeline/modal_app.py \
+        --from-month 2025-06 --output ./student
 
-A run flows prep → label → train → evaluate → (promote when the gate passes
-and auto_promote is on; otherwise it stops and prints what promote would do).
-Serving never touches Modal: the Oracle box polls R2's current.json and
-hot-swaps (see model_store.py), so Modal bills only these bursts.
+That single command, entirely on your Modal account (the recurring $30/mo
+credit covers it): ingests the free HackerNews archive into a Modal Volume,
+labels it with the frozen teacher (T4), distills the student (A10, 45-min
+hard cap ≈ $1), runs the eval gate, and downloads the INT8 ONNX model +
+tokenizer + eval report to --output. No other accounts, no servers, no
+object storage — everything lives in the Volume on your Modal account.
 
-COST GUARDS (why each exists — see docs/oracle-deployment.md §4):
-  - MAX_TRAIN_SECONDS caps the trainer's wall clock; the bill stays ~$1/run
-    forever while epochs-delivered float with corpus growth.
-  - MAX_TRAIN_SEQUENCES is asserted on CPU BEFORE the GPU container spawns.
-  - retries=0 on every GPU function: timeout × (retries+1) multiplies spend.
-  - max_containers=1 + the run lock: on-demand means humans can double-fire;
-    concurrent spawns must not each burn a GPU.
-  - No schedule attached to anything. A month with no triggers costs $0.
+Options:
+    --from-month / --to-month   archive window to ingest (YYYY-MM)
+    --limit N                   per-month row cap (quick smoke runs)
+    --corpus DIR                use YOUR local corpus instead of the archive
+                                (uploaded to the Volume; harvester layout)
+    --output DIR                where the trained model lands locally
+    --skip-ingest               reuse whatever the Volume already holds
 
-ONE-TIME SETUP:
-  modal secret create sentilyzer-r2 \
-      AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \
-      R2_ENDPOINT_URL=https://<account>.r2.cloudflarestorage.com \
-      R2_BUCKET=sentilyzer
-  The harvest box syncs its corpus to R2 (e.g. `rclone sync corpus/ r2:sentilyzer/corpus/`).
+Repeat runs are incremental: ingested months and teacher labels are reused,
+so a second run mostly pays for training (~$1).
+
+OPERATOR MODE (optional, for running the always-on API): set
+SENTILYZER_USE_R2=1 when deploying and the app additionally reads harvested
+corpus from R2 and promotes gated models to R2's students/current.json — the
+pointer a serving box hot-swaps from (see model_store.py). Requires the
+`sentilyzer-r2` Modal secret. The default mode references no secret at all.
+
+COST GUARDS (all enforced in code): the trainer's wall clock is capped
+(MAX_TRAIN_SECONDS), the sequence cap is asserted on CPU before any GPU
+spawns, GPU functions run with retries=0, a run lock stops double-fires,
+and nothing has a schedule — an untriggered month costs $0.
 """
 
 from __future__ import annotations
@@ -46,10 +55,15 @@ STUDENT_LAYERS = 6
 TEACHER_MODEL = "cardiffnlp/twitter-roberta-base-sentiment-latest"
 # ───────────────────────────────────────────────────────────────────────────
 
+# Operator mode is decided where `modal run`/`modal deploy` is invoked — the
+# default app references no secret, so a fresh clone needs zero setup beyond
+# `modal setup`.
+USE_R2 = os.environ.get("SENTILYZER_USE_R2") == "1"
+
 app = modal.App(APP_NAME)
 volume = modal.Volume.from_name("sentilyzer-train", create_if_missing=True)
 run_lock = modal.Dict.from_name("sentilyzer-train-lock", create_if_missing=True)
-r2_secret = modal.Secret.from_name("sentilyzer-r2")
+_secrets = [modal.Secret.from_name("sentilyzer-r2")] if USE_R2 else []
 
 DATA = "/data"
 
@@ -78,16 +92,28 @@ gpu_image = (
 )
 
 
-def _r2():
-    import boto3
+@app.function(image=cpu_image, volumes={DATA: volume}, timeout=3600)
+def ingest_hn(from_month: str, to_month: str = "", limit: int = 0) -> dict:
+    """Stream the free HN archive into the Volume's corpus — the default,
+    zero-infrastructure data source. Incremental: done months are skipped."""
+    from sentilyzer_ml.pipeline.hn_archive import ingest_months
 
-    return boto3.client("s3", endpoint_url=os.environ["R2_ENDPOINT_URL"]), os.environ["R2_BUCKET"]
+    total = ingest_months(
+        Path(DATA) / "corpus",
+        from_month,
+        to_month or None,
+        limit=limit or None,
+    )
+    volume.commit()
+    return {"ingested": total}
 
 
 def _sync_corpus_from_r2(dest: Path) -> int:
-    """Pull corpus partitions down for prep. Corpus is small relative to the
-    work (~15 MB/day gz); optimize to incremental sync when it matters."""
-    s3, bucket = _r2()
+    """Operator mode only: pull harvested partitions down from R2."""
+    import boto3
+
+    s3 = boto3.client("s3", endpoint_url=os.environ["R2_ENDPOINT_URL"])
+    bucket = os.environ["R2_BUCKET"]
     dest.mkdir(parents=True, exist_ok=True)
     n = 0
     paginator = s3.get_paginator("list_objects_v2")
@@ -103,12 +129,12 @@ def _sync_corpus_from_r2(dest: Path) -> int:
     return n
 
 
-@app.function(image=cpu_image, volumes={DATA: volume}, secrets=[r2_secret], timeout=1800)
+@app.function(image=cpu_image, volumes={DATA: volume}, secrets=_secrets, timeout=1800)
 def prep(run_id: str) -> dict:
     from sentilyzer_ml.pipeline.prep import PrepConfig, build_training_set
 
     corpus = Path(DATA) / "corpus"
-    files = _sync_corpus_from_r2(corpus)
+    synced = _sync_corpus_from_r2(corpus) if USE_R2 else 0
     out = Path(DATA) / "runs" / run_id / "train.parquet"
     stats = build_training_set(
         PrepConfig(
@@ -121,7 +147,7 @@ def prep(run_id: str) -> dict:
     assert stats.kept <= MAX_TRAIN_SEQUENCES, "prep exceeded the sequence cap"
     volume.commit()
     return {
-        "corpus_files": files,
+        "r2_files_synced": synced,
         "kept": stats.kept,
         "dropped_by_tombstone": stats.dropped_by_tombstone,
         "per_platform": stats.per_platform,
@@ -139,7 +165,10 @@ def label(run_id: str) -> dict:
     from sentilyzer_ml.pipeline.label import label_training_set
 
     # The frozen teacher, explicitly fp32 (see the transformers<5 pin above).
-    backend = TransformerBackend(TEACHER_MODEL, TEACHER_MODEL, device="cuda" if torch.cuda.is_available() else "cpu")
+    backend = TransformerBackend(
+        TEACHER_MODEL, TEACHER_MODEL,
+        device="cuda" if torch.cuda.is_available() else "cpu",
+    )
     run_dir = Path(DATA) / "runs" / run_id
     stats = label_training_set(
         run_dir / "train.parquet",
@@ -261,34 +290,35 @@ def evaluate(run_id: str) -> dict:
     return out
 
 
-@app.function(image=cpu_image, volumes={DATA: volume}, secrets=[r2_secret], timeout=900)
-def promote(run_id: str, metrics: dict) -> dict:
-    """Upload the run's artifact and flip current.json — the pointer the
-    Oracle box's ModelManager polls. Rollback = re-running this for a prior
-    run_id."""
-    s3, bucket = _r2()
-    run_dir = Path(DATA) / "runs" / run_id / "model"
+if USE_R2:
 
-    from sentilyzer_ml.pipeline.export import sha256_file
+    @app.function(image=cpu_image, volumes={DATA: volume}, secrets=_secrets, timeout=900)
+    def promote(run_id: str, metrics: dict) -> dict:
+        """Operator mode: upload the artifact and flip R2's current.json —
+        the pointer a serving box's ModelManager polls. Rollback = re-running
+        this for a prior run_id."""
+        import boto3
 
-    int8 = run_dir / "model.int8.onnx"
-    sha = sha256_file(int8)
-    for name in ("model.int8.onnx", "tokenizer.json"):
-        s3.upload_file(str(run_dir / name), bucket, f"students/{run_id}/{name}")
-    pointer = {"run_id": run_id, "sha256": sha, "metrics": metrics}
-    s3.put_object(
-        Bucket=bucket,
-        Key="students/current.json",
-        Body=json.dumps(pointer).encode(),
-        ContentType="application/json",
-    )
-    return pointer
+        from sentilyzer_ml.pipeline.export import sha256_file
+
+        s3 = boto3.client("s3", endpoint_url=os.environ["R2_ENDPOINT_URL"])
+        bucket = os.environ["R2_BUCKET"]
+        run_dir = Path(DATA) / "runs" / run_id / "model"
+        sha = sha256_file(run_dir / "model.int8.onnx")
+        for name in ("model.int8.onnx", "tokenizer.json"):
+            s3.upload_file(str(run_dir / name), bucket, f"students/{run_id}/{name}")
+        pointer = {"run_id": run_id, "sha256": sha, "metrics": metrics}
+        s3.put_object(
+            Bucket=bucket, Key="students/current.json",
+            Body=json.dumps(pointer).encode(), ContentType="application/json",
+        )
+        return pointer
 
 
 @app.function(image=cpu_image, timeout=4 * 3600)
 def run_pipeline(auto_promote: bool = False) -> dict:
-    """The on-demand orchestrator: lock → prep → label → train → evaluate →
-    maybe promote. Everything it decides is returned for the caller to see."""
+    """Orchestrates one run: lock → prep → label → train → evaluate →
+    (promote in operator mode). Returns everything it decided."""
     held = run_lock.get("run", None)
     now = time.time()
     if held and now - held.get("started_at", 0) < LOCK_STALE_SECONDS:
@@ -302,36 +332,81 @@ def run_pipeline(auto_promote: bool = False) -> dict:
         summary["label"] = label.remote(run_id)
         summary["train"] = train.remote(run_id)
         summary["eval"] = evaluate.remote(run_id)
-        if summary["eval"]["passed"] and auto_promote:
+        if USE_R2 and auto_promote and summary["eval"]["passed"]:
             summary["promoted"] = promote.remote(run_id, summary["eval"])
         else:
             summary["promoted"] = False
-            summary["promote_hint"] = (
-                f"gate {'PASSED' if summary['eval']['passed'] else 'FAILED'}; "
-                f"to promote manually: modal run …::promote_run --run-id {run_id}"
-            )
         return summary
     finally:
         run_lock.pop("run", None)
 
 
+@app.function(image=cpu_image, volumes={DATA: volume}, timeout=600)
+def read_artifact(run_id: str) -> dict[str, bytes]:
+    """Hand the trained artifact back so the CLI can write it locally —
+    the self-service output path needs no storage account at all."""
+    run_dir = Path(DATA) / "runs" / run_id
+    out: dict[str, bytes] = {}
+    for name in ("model/model.int8.onnx", "model/tokenizer.json", "eval.json",
+                 "train.parquet.manifest.json"):
+        path = run_dir / name
+        if path.exists():
+            out[Path(name).name] = path.read_bytes()
+    return out
+
+
 @app.function(image=cpu_image, timeout=60)
 @modal.fastapi_endpoint(method="POST", requires_proxy_auth=True)
 def trigger(auto_promote: bool = False) -> dict:
-    """HTTP trigger: spawns a pipeline run and returns immediately with the
-    call id (pollable via Modal). Proxy-auth keeps this from being a public
-    free-GPU button."""
+    """HTTP trigger for deployed apps: spawns a run and returns the call id.
+    Proxy-auth keeps this from being a public free-GPU button."""
     call = run_pipeline.spawn(auto_promote)
     return {"spawned": call.object_id}
 
 
 @app.local_entrypoint()
-def main(auto_promote: bool = False):
-    """`modal run …/modal_app.py` — trigger a run from your terminal and wait."""
-    print(json.dumps(run_pipeline.remote(auto_promote), indent=2))
+def main(
+    from_month: str = "2025-01",
+    to_month: str = "",
+    limit: int = 0,
+    corpus: str = "",
+    output: str = "./student",
+    skip_ingest: bool = False,
+    auto_promote: bool = False,
+):
+    """The clone-and-run flow. See the module docstring for examples."""
+    if corpus:
+        src = Path(corpus)
+        if not src.is_dir():
+            raise SystemExit(f"--corpus {corpus}: not a directory")
+        print(f"uploading local corpus {src} -> Volume /corpus …")
+        with volume.batch_upload(force=True) as batch:
+            batch.put_directory(str(src), "/corpus")
+    elif not skip_ingest:
+        print(f"ingesting HN archive {from_month}..{to_month or 'latest full month'} …")
+        print(json.dumps(ingest_hn.remote(from_month, to_month, limit)))
+
+    summary = run_pipeline.remote(auto_promote)
+    print(json.dumps(summary, indent=2))
+    if "skipped" in summary:
+        return
+
+    out_dir = Path(output)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for name, blob in read_artifact.remote(summary["run_id"]).items():
+        (out_dir / name).write_bytes(blob)
+        print(f"wrote {out_dir / name} ({len(blob):,} bytes)")
+    verdict = summary.get("eval", {})
+    print(f"\ngate: {'PASSED' if verdict.get('passed') else 'FAILED'} "
+          f"(agreement={verdict.get('agreement')})")
+    print(f"model: {out_dir / 'model.int8.onnx'}")
+    print("serve it locally: SENTILYZER_ML_USE_STUB=0 + point OnnxBackend at that directory,")
+    print("or with the API: make up, then set the model-store env (see README).")
 
 
 @app.local_entrypoint()
 def promote_run(run_id: str):
-    """Manually promote (or roll back to) a specific run's artifact."""
+    """Operator mode: manually promote (or roll back to) a run's artifact."""
+    if not USE_R2:
+        raise SystemExit("promotion needs operator mode: SENTILYZER_USE_R2=1 and the sentilyzer-r2 secret")
     print(json.dumps(promote.remote(run_id, {"manual": True}), indent=2))

@@ -197,6 +197,42 @@ Key knobs:
 | `SENTILYZER_ML_MAX_BATCH`    | `32`                                 | Batch ceiling — **set it on both processes or neither** |
 | `SENTILYZER_CACHE_TTL`       | `10m`                                | LRU TTL for topic queries              |
 
+## Train your own student (on your Modal account)
+
+The distillation pipeline runs entirely on **your** [Modal](https://modal.com)
+account — no servers, no storage accounts, no keys handed to anyone. Modal's
+recurring free credit covers it (a full run costs ~$1–2 of credit; an idle
+month costs $0):
+
+```bash
+cd ml
+pip install modal && modal setup       # authenticates YOUR Modal account
+modal run sentilyzer_ml/pipeline/modal_app.py     --from-month 2025-06 --output ./student
+```
+
+That one command ingests the freely licensed HackerNews archive into a Modal
+Volume, labels it with the frozen teacher (T4), distills a 6-layer INT8 ONNX
+student (A10, hard 45-minute cap), runs the eval gate (agreement +
+per-class-collapse floors), and downloads `model.int8.onnx` + tokenizer +
+`eval.json` to `--output`. Useful options:
+
+| Flag | Meaning |
+|------|---------|
+| `--from-month` / `--to-month` | archive window to ingest (YYYY-MM) |
+| `--limit N`      | per-month row cap — cheap smoke runs |
+| `--corpus DIR`   | train on your own harvested corpus instead of the archive |
+| `--skip-ingest`  | reuse whatever the Volume already holds |
+
+Repeat runs are incremental (ingested months and teacher labels are reused),
+and training is bounded by wall clock, so the bill stays ~$1/run no matter
+how big the corpus grows. To serve the result, point the ML worker's model
+store at wherever you host the artifact — or run the worker with the
+directory directly (`sentilyzer_ml.onnx_backend.OnnxBackend`).
+
+Operators running the always-on API additionally set `SENTILYZER_USE_R2=1`
+at deploy time to promote gated models to R2, where the serving worker
+hot-swaps them — see `docs/oracle-deployment.md`.
+
 ## Development
 
 ```bash
