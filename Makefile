@@ -61,7 +61,7 @@ ml-install: ## Install Python ML deps into the active environment.
 
 .PHONY: ml-run
 ml-run: ## Run the Python ML inference service.
-	cd ml && $(PYTHON) -m sentilyzer_ml.server
+	cd ml && $(if $(SENTILYZER_ML_MODEL_DIR),SENTILYZER_ML_MODEL_DIR="$(abspath $(SENTILYZER_ML_MODEL_DIR))") $(PYTHON) -m sentilyzer_ml.server
 
 .PHONY: ml-test
 ml-test: ## Run Python tests.

@@ -240,3 +240,15 @@ def test_build_backend_serves_local_model_dir(artifact_dir):
         )
     )
     assert not hasattr(plain, "served_run_id")
+
+
+def test_missing_model_dir_gives_actionable_error(tmp_path):
+    """The exact first-user failure: pointing at a dir with no artifact must
+    explain itself (resolved path + what to run), not surface onnxruntime's
+    bare NoSuchFile."""
+    with pytest.raises(FileNotFoundError) as err:
+        OnnxBackend(tmp_path / "student")
+    msg = str(err.value)
+    assert "model.int8.onnx" in msg
+    assert "--output" in msg
+    assert "haven't trained yet" in msg

@@ -58,6 +58,23 @@ class OnnxBackend:
         from tokenizers import Tokenizer
 
         model_dir = Path(model_dir)
+        missing = [
+            n for n in (MODEL_FILENAME, TOKENIZER_FILENAME)
+            if not (model_dir / n).is_file()
+        ]
+        if missing:
+            # Fail with the RESOLVED path and what to do — onnxruntime's own
+            # NoSuchFile error hides both.
+            raise FileNotFoundError(
+                f"student model dir {str(model_dir.resolve())!r} is missing "
+                f"{missing}. Expected the --output directory of a training run "
+                "(modal run sentilyzer_ml/pipeline/modal_app.py … --output DIR). "
+                "If you haven't trained yet, that comes first. Relative paths "
+                "resolve from the server's working directory — `make ml-run` "
+                "absolutizes SENTILYZER_ML_MODEL_DIR for you, but a bare "
+                "`python -m sentilyzer_ml.server` runs from ml/, so prefer an "
+                "absolute path there."
+            )
         if intra_op_threads is None:
             intra_op_threads = int(os.getenv("SENTILYZER_ML_ORT_THREADS", "2"))
 

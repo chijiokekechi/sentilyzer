@@ -232,10 +232,15 @@ fresh student.
 don't; nothing runs in between:
 
 ```bash
-SENTILYZER_ML_MODEL_DIR=./student make ml-run      # worker serves YOUR student
+# model path is relative to the repo root (make absolutizes it for you)
+SENTILYZER_ML_MODEL_DIR=ml/student make ml-run     # worker serves YOUR student
 make api-run                                       # gateway, other terminal
 curl "localhost:8080/v1/analyze/topic?topic=rust&limit_per_platform=5" | jq
 ```
+
+If 8080/9090 are taken on your machine (Prometheus famously squats 9090),
+pick free ports: `SENTILYZER_HTTP_ADDR=":8098" SENTILYZER_GRPC_ADDR=":9091"
+make api-run` — then curl port 8098.
 
 Document-level sentiment comes from your student; aspect analysis keeps the
 teacher (the student's aspect head is untrained until aspect labels exist).
