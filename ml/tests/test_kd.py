@@ -161,6 +161,19 @@ def test_distill_learns_and_respects_budget(teacher, tmp_path):
     assert result.losses[-1] < result.losses[0] * 0.8
 
 
+def test_distill_device_contract(teacher, tmp_path):
+    """The device rides the config end to end (the first full Modal run
+    trained on CPU while the A10 idled — device must be explicit, reported,
+    and absent from CPU checkpoints so resume stays portable)."""
+    texts, probs = _toy_task()
+    student = build_student_from_teacher(teacher, student_layers=2)
+    cfg = DistillConfig(batch_size=16, max_seconds=60, max_sequences=32, seed=7, device="cpu")
+    result = distill(student, texts, probs, fake_tokenize, cfg, tmp_path / "ckpt")
+    assert result.device == "cpu"
+    state = torch.load(tmp_path / "ckpt" / "checkpoint.pt", weights_only=True, map_location="cpu")
+    assert "rng" in state and "rng_cuda" not in state
+
+
 def test_distill_sequence_budget_stops_early(teacher, tmp_path):
     texts, probs = _toy_task()
     student = build_student_from_teacher(teacher, student_layers=2)

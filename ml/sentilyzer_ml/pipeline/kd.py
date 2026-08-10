@@ -49,6 +49,7 @@ class DistillConfig:
     max_sequences: int = 1_840_000
     checkpoint_every_steps: int = 500
     seed: int = 13
+    device: str = "cpu"
 
 
 @dataclass
@@ -59,6 +60,7 @@ class DistillResult:
     resumed: bool = False
     final_loss: float = math.nan
     losses: list[float] = field(default_factory=list)
+    device: str = "cpu"
 
 
 class TwoHeadStudent(nn.Module):
@@ -171,18 +173,29 @@ def distill(
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     ckpt_path = ckpt_dir / "checkpoint.pt"
 
+    device = torch.device(cfg.device)
+    if device.type == "cuda":
+        # TF32 keeps fp32 KD semantics while actually using the tensor cores.
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+    student.to(device)  # before the optimizer, so its state lives with the params
+
     optimizer = torch.optim.AdamW(student.parameters(), lr=cfg.lr)
-    result = DistillResult()
+    result = DistillResult(device=cfg.device)
     start_batch = 0
 
     if ckpt_path.exists():
-        state = torch.load(ckpt_path, weights_only=True)
+        # Always load to CPU: load_state_dict copies into the (possibly CUDA)
+        # params, and the RNG blobs must stay CPU byte tensors.
+        state = torch.load(ckpt_path, weights_only=True, map_location="cpu")
         student.load_state_dict(state["model"])
         optimizer.load_state_dict(state["optimizer"])
         # Restore the RNG so dropout masks continue exactly where they left
         # off — without this, a resumed run silently diverges from an
         # uninterrupted one (the masks differ from the resume point on).
         torch.set_rng_state(state["rng"])
+        if device.type == "cuda" and "rng_cuda" in state:
+            torch.cuda.set_rng_state(state["rng_cuda"], device)
         start_batch = state["next_batch"]
         result.steps = state["steps"]
         result.sequences_seen = state["sequences_seen"]
@@ -195,17 +208,18 @@ def distill(
 
     def save(next_batch: int) -> None:
         tmp = ckpt_path.with_suffix(".tmp")
-        torch.save(
-            {
-                "model": student.state_dict(),
-                "optimizer": optimizer.state_dict(),
-                "rng": torch.get_rng_state(),
-                "next_batch": next_batch,
-                "steps": result.steps,
-                "sequences_seen": result.sequences_seen,
-            },
-            tmp,
-        )
+        payload = {
+            "model": student.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "rng": torch.get_rng_state(),
+            "next_batch": next_batch,
+            "steps": result.steps,
+            "sequences_seen": result.sequences_seen,
+        }
+        if device.type == "cuda":
+            # CUDA dropout draws from the device RNG — resume needs it too.
+            payload["rng_cuda"] = torch.cuda.get_rng_state(device)
+        torch.save(payload, tmp)
         tmp.replace(ckpt_path)  # atomic: a crash never truncates a good checkpoint
 
     for batch_no, idx in enumerate(_batches(len(texts), cfg.batch_size, cfg.seed)):
@@ -217,8 +231,8 @@ def distill(
             break
 
         enc = tokenize([texts[i] for i in idx])
-        probs = teacher_probs[idx]
-        logits_doc, _ = student(enc["input_ids"], enc["attention_mask"])
+        probs = teacher_probs[idx].to(device)
+        logits_doc, _ = student(enc["input_ids"].to(device), enc["attention_mask"].to(device))
         loss = kd_loss(logits_doc, probs, cfg.temperature)
 
         optimizer.zero_grad()

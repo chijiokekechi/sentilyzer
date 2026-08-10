@@ -159,11 +159,13 @@ def label(run_id: str) -> dict:
     from sentilyzer_ml.inference import TransformerBackend
     from sentilyzer_ml.pipeline.label import label_training_set
 
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "label() reserved a T4 but torch sees no CUDA device — refusing "
+            "to burn the GPU budget labeling on CPU"
+        )
     # The frozen teacher, explicitly fp32 (see the transformers<5 pin above).
-    backend = TransformerBackend(
-        TEACHER_MODEL, TEACHER_MODEL,
-        device="cuda" if torch.cuda.is_available() else "cpu",
-    )
+    backend = TransformerBackend(TEACHER_MODEL, TEACHER_MODEL, device="cuda")
     run_dir = Path(DATA) / "runs" / run_id
     stats = label_training_set(
         run_dir / "train.parquet",
@@ -218,12 +220,20 @@ def train(run_id: str) -> dict:
     def tokenize(batch: list[str]):
         return tokenizer(batch, padding=True, truncation=True, max_length=128, return_tensors="pt")
 
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "train() reserved an A10 but torch sees no CUDA device — refusing "
+            "to burn the training budget on CPU (the first full run did "
+            "exactly that: 240 steps in 45 minutes)"
+        )
     result = distill(
         student, texts, probs, tokenize,
         DistillConfig(
             student_layers=STUDENT_LAYERS,
             max_seconds=MAX_TRAIN_SECONDS - 600,  # leave room for export inside the cap
             max_sequences=MAX_TRAIN_SEQUENCES,
+            batch_size=64,
+            device="cuda",
         ),
         checkpoint_dir=run_dir / "ckpt",
     )
@@ -238,6 +248,7 @@ def train(run_id: str) -> dict:
         "partial": result.partial,
         "resumed": result.resumed,
         "final_loss": result.final_loss,
+        "device": result.device,  # a CPU here means the GPU guard has rotted
         "int8_sha256": export.int8_sha256,
         "int8_bytes": export.int8_bytes,
     }
