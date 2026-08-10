@@ -45,10 +45,26 @@ APP_NAME = "sentilyzer-train"
 MAX_TRAIN_SECONDS = 2_700  # 45 min on A10 ≈ $0.99/run, fixed forever
 MAX_TRAIN_SEQUENCES = 1_840_000  # asserted on CPU before any GPU spawns
 LOCK_STALE_SECONDS = 3 * 3600  # a crashed run frees the lock after this
-HOLDOUT_ROWS = 5_000  # tail of the deterministic prep order; never trained
+HOLDOUT_ROWS = 5_000  # holdout ceiling; small runs scale it down (see holdout_rows)
+MIN_LABELED_ROWS = 2_500  # floor so the gate's 500-row minimum is meetable
 STUDENT_LAYERS = 6
 TEACHER_MODEL = "cardiffnlp/twitter-roberta-base-sentiment-latest"
 # ───────────────────────────────────────────────────────────────────────────
+
+def holdout_rows(n_labeled: int) -> int:
+    """Held-out slice size: 20% of the data up to HOLDOUT_ROWS.
+
+    Train and evaluate MUST derive the same number from the same row count —
+    they read the same deterministic join, so agreeing on this function is
+    what keeps the gate scoring rows the trainer never saw.
+    """
+    if n_labeled < MIN_LABELED_ROWS:
+        raise RuntimeError(
+            f"only {n_labeled} labeled rows; need at least {MIN_LABELED_ROWS} "
+            "— raise --limit or ingest more months"
+        )
+    return min(HOLDOUT_ROWS, n_labeled // 5)
+
 
 app = modal.App(APP_NAME)
 volume = modal.Volume.from_name("sentilyzer-train", create_if_missing=True)
@@ -165,10 +181,8 @@ def train(run_id: str) -> dict:
         JOIN read_parquet('{Path(DATA) / "labels" / "labels.parquet"}') l
         USING (platform, doc_id)
     """).fetchall()
-    if len(rows) <= HOLDOUT_ROWS:
-        raise RuntimeError(f"only {len(rows)} labeled rows; not enough to hold out {HOLDOUT_ROWS}")
     # Prep's output order is deterministic; the tail is the held-out slice.
-    train_rows = rows[:-HOLDOUT_ROWS]
+    train_rows = rows[: -holdout_rows(len(rows))]
 
     texts = [r[0] for r in train_rows]
     probs = torch.tensor([[r[1], r[2], r[3]] for r in train_rows], dtype=torch.float32)
@@ -232,7 +246,7 @@ def evaluate(run_id: str) -> dict:
         JOIN read_parquet('{Path(DATA) / "labels" / "labels.parquet"}') l
         USING (platform, doc_id)
     """).fetchall()
-    heldout = rows[-HOLDOUT_ROWS:]
+    heldout = rows[-holdout_rows(len(rows)):]
 
     # The same backend the worker serves with — evaluating exactly what ships.
     backend = OnnxBackend(run_dir / "model", intra_op_threads=2)
