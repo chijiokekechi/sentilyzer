@@ -129,6 +129,19 @@ class OnnxBackend:
         return out
 
 
+class StaticStudent:
+    """ModelManager stand-in for one fixed local artifact — the on-demand
+    serving path: point the worker at the --output directory of a training
+    run. No store, no polling, no accounts; current() never changes."""
+
+    def __init__(self, backend, run_id: str):
+        self._backend = backend
+        self.run_id = run_id
+
+    def current(self):
+        return self._backend
+
+
 class ManagedBackend:
     """Routes between the hot-swappable student and the base backend.
 

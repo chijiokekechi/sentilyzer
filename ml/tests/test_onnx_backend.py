@@ -212,3 +212,31 @@ def test_servicer_ready_without_student(managed):
     resp = servicer.Ready(None, None)
     assert resp.ready
     assert "student" not in resp.general_model
+
+
+def test_build_backend_serves_local_model_dir(artifact_dir):
+    """SENTILYZER_ML_MODEL_DIR: the on-demand serving path — worker points at
+    a training run's --output directory, no store, no polling."""
+    config = cfg.Config(
+        listen_addr="[::]:0",
+        general_model="stub",
+        aspect_model="stub",
+        device="cpu",
+        max_batch_size=32,
+        max_text_chars=2000,
+        use_stub=True,
+        model_dir=str(artifact_dir),
+    )
+    backend = srv.build_backend(config)
+    assert backend.served_run_id() == artifact_dir.name
+    preds = backend.classify(["good chair"])
+    assert preds[0].label in LABELS
+
+    # Without model_dir: the plain base backend, no student wrapper.
+    plain = srv.build_backend(
+        cfg.Config(
+            listen_addr="[::]:0", general_model="stub", aspect_model="stub",
+            device="cpu", max_batch_size=32, max_text_chars=2000, use_stub=True,
+        )
+    )
+    assert not hasattr(plain, "served_run_id")

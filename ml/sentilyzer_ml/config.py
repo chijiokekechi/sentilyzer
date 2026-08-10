@@ -15,13 +15,10 @@ class Config:
     max_batch_size: int
     max_text_chars: int
     use_stub: bool
-    # Model-store settings for serving the distilled student. Both empty =
-    # teacher/stub-only serving, no polling, no boto3 import. Defaults keep
-    # direct Config(...) construction (tests, embedding) source-compatible.
-    model_bucket: str = ""
-    model_endpoint: str = ""
-    model_cache: str = "model-cache"
-    model_poll_seconds: int = 300
+    # Serve a trained student from a LOCAL directory (the --output of
+    # `modal run …/modal_app.py`): model.int8.onnx + tokenizer.json. Empty =
+    # teacher/stub-only serving. On-demand by design — no store, no polling.
+    model_dir: str = ""
     ort_threads: int = 2
 
     @classmethod
@@ -40,9 +37,6 @@ class Config:
             max_batch_size=int(os.getenv("SENTILYZER_ML_MAX_BATCH", "32")),
             max_text_chars=int(os.getenv("SENTILYZER_ML_MAX_CHARS", "2000")),
             use_stub=os.getenv("SENTILYZER_ML_USE_STUB", "0") in {"1", "true", "TRUE"},
-            model_bucket=os.getenv("SENTILYZER_ML_MODEL_BUCKET", ""),
-            model_endpoint=os.getenv("SENTILYZER_ML_MODEL_ENDPOINT", ""),
-            model_cache=os.getenv("SENTILYZER_ML_MODEL_CACHE", "model-cache"),
-            model_poll_seconds=int(os.getenv("SENTILYZER_ML_MODEL_POLL_SECONDS", "300")),
+            model_dir=os.getenv("SENTILYZER_ML_MODEL_DIR", ""),
             ort_threads=int(os.getenv("SENTILYZER_ML_ORT_THREADS", "2")),
         )

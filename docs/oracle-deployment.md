@@ -17,6 +17,12 @@ until the host recovers or you SSH in. This is NOT "always available"; never adv
 Prices/limits/credit-terms drift -- re-verify before relying on them. Not legal advice.
 -->
 
+> **ARCHIVED (2026-08-10):** the project settled on **on-demand end-to-end
+> runs only** — train on your own Modal account with one command, serve
+> locally when needed. No always-on box, no R2, no promotion pointer. This
+> document describes the always-on operated-API design that was NOT chosen;
+> it is kept for reference only.
+
 # Sentilyzer on one free Oracle A1 box + Modal training — the plan
 
 ## 1. The answer, in five sentences

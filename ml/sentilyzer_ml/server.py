@@ -106,34 +106,34 @@ class InferenceServicer(igrpc.InferenceServiceServicer):
         return (text or "")[: self.config.max_text_chars]
 
 
-def serve(config: cfg.Config | None = None) -> grpc.Server:
-    config = config or cfg.Config.from_env()
+def build_backend(config: cfg.Config):
+    """The worker's serving backend: teachers/stub, optionally with a locally
+    trained student answering document-level requests."""
     backend = inf.make_backend(
         use_stub=config.use_stub,
         general_model=config.general_model,
         aspect_model=config.aspect_model,
         device=config.device,
     )
-    if config.model_bucket and config.model_endpoint:
-        # Serve the promoted student when one exists, hot-swapping as the
-        # trainer promotes new runs; the backend above remains the fallback
-        # (and always answers aspect requests — see ManagedBackend).
-        from .model_store import ModelManager, S3ArtifactStore
-        from .onnx_backend import ManagedBackend, OnnxBackend
+    if config.model_dir:
+        # Serve a student trained by `modal run …/modal_app.py`: point
+        # SENTILYZER_ML_MODEL_DIR at its --output directory. Doc-level
+        # requests use the student; aspects keep the base backend (see
+        # ManagedBackend). On-demand: a fixed artifact, no polling.
+        from pathlib import Path
 
-        manager = ModelManager(
-            S3ArtifactStore(config.model_bucket, endpoint_url=config.model_endpoint),
-            lambda d: OnnxBackend(d, intra_op_threads=config.ort_threads),
-            cache_dir=config.model_cache,
-        )
-        manager.refresh()  # pick up the current student before first request
-        manager.start_polling(config.model_poll_seconds)
-        backend = ManagedBackend(backend, manager)
-        logger.info(
-            "model store enabled (bucket=%s, serving=%s)",
-            config.model_bucket,
-            manager.run_id or "fallback (no promoted student yet)",
-        )
+        from .onnx_backend import ManagedBackend, OnnxBackend, StaticStudent
+
+        student = OnnxBackend(config.model_dir, intra_op_threads=config.ort_threads)
+        run_id = Path(config.model_dir).resolve().name
+        backend = ManagedBackend(backend, StaticStudent(student, run_id))
+        logger.info("serving local student from %s (run %s)", config.model_dir, run_id)
+    return backend
+
+
+def serve(config: cfg.Config | None = None) -> grpc.Server:
+    config = config or cfg.Config.from_env()
+    backend = build_backend(config)
     server = grpc.server(
         futures.ThreadPoolExecutor(max_workers=4),
         options=[

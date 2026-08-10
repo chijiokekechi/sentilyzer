@@ -225,13 +225,20 @@ per-class-collapse floors), and downloads `model.int8.onnx` + tokenizer +
 
 Repeat runs are incremental (ingested months and teacher labels are reused),
 and training is bounded by wall clock, so the bill stays ~$1/run no matter
-how big the corpus grows. To serve the result, point the ML worker's model
-store at wherever you host the artifact — or run the worker with the
-directory directly (`sentilyzer_ml.onnx_backend.OnnxBackend`).
+how big the corpus grows. The run ends with sample predictions from your
+fresh student.
 
-Operators running the always-on API additionally set `SENTILYZER_USE_R2=1`
-at deploy time to promote gated models to R2, where the serving worker
-hot-swaps them — see `docs/oracle-deployment.md`.
+**Serve it on demand** — start the API when you need it, stop it when you
+don't; nothing runs in between:
+
+```bash
+SENTILYZER_ML_MODEL_DIR=./student make ml-run      # worker serves YOUR student
+make api-run                                       # gateway, other terminal
+curl "localhost:8080/v1/analyze/topic?topic=rust&limit_per_platform=5" | jq
+```
+
+Document-level sentiment comes from your student; aspect analysis keeps the
+teacher (the student's aspect head is untrained until aspect labels exist).
 
 ## Development
 

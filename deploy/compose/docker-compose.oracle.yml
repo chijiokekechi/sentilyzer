@@ -1,3 +1,7 @@
+# ARCHIVED (2026-08-10): the project settled on on-demand end-to-end runs —
+# no always-on serving. Kept for reference; the maintained local stack is
+# docker-compose.yml. See README "Train your own student".
+#
 # Single-box production stack for a free Oracle Cloud Always-Free A1 box.
 # See docs/oracle-deployment.md for the full runbook.
 #
