@@ -7,8 +7,8 @@ import (
 )
 
 var (
-	tagRE   = regexp.MustCompile(`<[^>]+>`)
-	wsRE    = regexp.MustCompile(`\s+`)
+	tagRE = regexp.MustCompile(`<[^>]+>`)
+	wsRE  = regexp.MustCompile(`\s+`)
 )
 
 // stripHTML returns the text with HTML tags removed and entities decoded.

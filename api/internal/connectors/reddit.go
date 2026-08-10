@@ -43,6 +43,10 @@ func (r *Reddit) Enabled() (bool, string) {
 	return true, ""
 }
 
+func (*Reddit) Policy() Policy {
+	return Policy{Reason: "Data API Terms 2.4 withholds training rights on behalf of rightsholders; uncurable (docs/corpus-policy.md)"}
+}
+
 // Reddit deliberately does NOT accept caller-supplied keys: Reddit's
 // Developer Terms (1.4) ban sharing Access Info with third parties without
 // Reddit's permission, so a caller handing us their client credentials would

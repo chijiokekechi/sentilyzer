@@ -28,11 +28,11 @@ func TestMock_Deterministic(t *testing.T) {
 
 func TestStockTwits_ExtractSymbol(t *testing.T) {
 	cases := map[string]string{
-		"AAPL":             "AAPL",
-		"$TSLA":            "TSLA",
-		"the stock $NVDA":  "NVDA",
-		"Robinhood UI":     "",
-		"":                 "",
+		"AAPL":            "AAPL",
+		"$TSLA":           "TSLA",
+		"the stock $NVDA": "NVDA",
+		"Robinhood UI":    "",
+		"":                "",
 	}
 	for in, want := range cases {
 		got := connectors.ExportExtractSymbol(in)

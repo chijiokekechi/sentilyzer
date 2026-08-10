@@ -32,6 +32,11 @@ func (HackerNews) ID() string              { return "hackernews" }
 func (HackerNews) DisplayName() string     { return "Hacker News" }
 func (HackerNews) Enabled() (bool, string) { return true, "" }
 
+// Policy: HN's public APIs are sanctioned interfaces with no training
+// prohibition (docs/corpus-policy.md, audited 2026-07-15). Algolia's
+// created_at_i filters make historical windows reachable.
+func (HackerNews) Policy() Policy { return Policy{Durable: true, Backfillable: true} }
+
 type hnResponse struct {
 	Hits []struct {
 		ObjectID    string `json:"objectID"`

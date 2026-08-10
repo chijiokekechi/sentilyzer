@@ -39,6 +39,10 @@ func (m *Mastodon) Enabled() (bool, string) {
 	return true, ""
 }
 
+func (Mastodon) Policy() Policy {
+	return Policy{Reason: "instance operators opted out of AI use via robots.txt; excluded on judgment (docs/corpus-policy.md)"}
+}
+
 // EnabledWith also accepts a caller-supplied access token (and optionally the
 // caller's own instance; without one the server's default instance is used).
 func (m *Mastodon) EnabledWith(creds Credentials) (bool, string) {

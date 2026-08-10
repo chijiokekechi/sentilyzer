@@ -15,9 +15,12 @@ import (
 // for first-run UX before real API keys are configured.
 type Mock struct{}
 
-func (Mock) ID() string                   { return "mock" }
-func (Mock) DisplayName() string          { return "Mock (synthetic)" }
-func (Mock) Enabled() (bool, string)      { return true, "" }
+func (Mock) ID() string              { return "mock" }
+func (Mock) DisplayName() string     { return "Mock (synthetic)" }
+func (Mock) Enabled() (bool, string) { return true, "" }
+func (Mock) Policy() Policy {
+	return Policy{Reason: "synthetic content would poison the corpus"}
+}
 
 var mockTemplates = []string{
 	"I really love %s — best decision I made this year, can't recommend it enough.",

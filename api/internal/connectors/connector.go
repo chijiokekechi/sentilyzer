@@ -28,6 +28,32 @@ type Query struct {
 	Creds Credentials
 }
 
+// Policy declares what may be done with a platform's content beyond serving
+// one request. The authoritative table lives in docs/corpus-policy.md; the
+// values here must mirror it, and a Durable flag flips only when that
+// document changes first.
+//
+// This is a METHOD ON THE INTERFACE rather than a config flag or a
+// WHERE-clause so that adding a connector forces the eligibility decision at
+// compile time — a flag rots the first time someone wires a platform in at
+// 3am without re-reading the audit.
+type Policy struct {
+	// Durable reports whether content from this platform — or anything
+	// derived from it — may be written to durable storage (the training
+	// corpus, persisted aggregates). False does NOT disable the connector:
+	// the interactive serving path persists nothing beyond the 10-minute
+	// in-memory cache, which every source tolerates.
+	Durable bool
+	// Backfillable reports whether Search (or the platform's bulk interface)
+	// can target a historical window. A non-backfillable source that misses a
+	// harvest window has lost that data permanently.
+	Backfillable bool
+	// Reason explains why Durable is false. Empty when Durable is true. It
+	// exists so the decision gets re-argued on its merits rather than
+	// quietly flipped.
+	Reason string
+}
+
 // Connector is the contract every platform implements.
 type Connector interface {
 	ID() string
@@ -36,6 +62,9 @@ type Connector interface {
 	// needs to run a real search. A disabled connector still appears in
 	// ListPlatforms with a reason; it simply returns no results.
 	Enabled() (bool, string)
+	// Policy declares the platform's durable-storage eligibility per
+	// docs/corpus-policy.md.
+	Policy() Policy
 	Search(ctx context.Context, q Query) ([]domain.SourcedDocument, error)
 }
 

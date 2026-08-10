@@ -23,9 +23,10 @@ type scriptedConnector struct {
 	calls int
 }
 
-func (c *scriptedConnector) ID() string              { return c.id }
-func (c *scriptedConnector) DisplayName() string     { return c.id }
-func (c *scriptedConnector) Enabled() (bool, string) { return true, "" }
+func (c *scriptedConnector) ID() string                { return c.id }
+func (c *scriptedConnector) DisplayName() string       { return c.id }
+func (c *scriptedConnector) Enabled() (bool, string)   { return true, "" }
+func (c *scriptedConnector) Policy() connectors.Policy { return connectors.Policy{} }
 
 func (c *scriptedConnector) Search(ctx context.Context, _ connectors.Query) ([]domain.SourcedDocument, error) {
 	c.calls++

@@ -31,6 +31,10 @@ func (StockTwits) ID() string              { return "stocktwits" }
 func (StockTwits) DisplayName() string     { return "StockTwits (cashtags)" }
 func (StockTwits) Enabled() (bool, string) { return true, "" }
 
+func (StockTwits) Policy() Policy {
+	return Policy{Reason: "ToS bars extraction outside an approved API, and no approved path exists (docs/corpus-policy.md)"}
+}
+
 type stocktwitsResp struct {
 	Messages []struct {
 		ID        int64     `json:"id"`

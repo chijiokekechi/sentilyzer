@@ -53,6 +53,11 @@ func (*RSS) ID() string              { return "rss" }
 func (*RSS) DisplayName() string     { return "RSS / Atom feeds" }
 func (*RSS) Enabled() (bool, string) { return true, "" }
 
+// Policy: feeds are deliberately-syndicated content, lawfully acquired
+// (docs/corpus-policy.md). A feed exposes only its current items, so a
+// missed harvest window is gone permanently.
+func (*RSS) Policy() Policy { return Policy{Durable: true, Backfillable: false} }
+
 func (r *RSS) Search(ctx context.Context, q Query) ([]domain.SourcedDocument, error) {
 	if q.Topic == "" {
 		return nil, nil

@@ -37,6 +37,10 @@ func (y *YouTube) Enabled() (bool, string) {
 	return true, ""
 }
 
+func (YouTube) Policy() Policy {
+	return Policy{Reason: "API terms: 30-day retention cap and derived-data ban (docs/corpus-policy.md)"}
+}
+
 // EnabledWith also accepts a caller-supplied API key.
 func (y *YouTube) EnabledWith(creds Credentials) (bool, string) {
 	if creds.YouTubeAPIKey != "" {

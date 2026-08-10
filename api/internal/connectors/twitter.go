@@ -37,6 +37,10 @@ func (t *Twitter) Enabled() (bool, string) {
 	return true, ""
 }
 
+func (Twitter) Policy() Policy {
+	return Policy{Reason: "Developer Agreement III.A(d)/(k): derivative-works and training bans (docs/corpus-policy.md)"}
+}
+
 // Twitter deliberately does NOT accept caller-supplied keys: X's Developer
 // Agreement (III.G) bans making any token, key, or password available to a
 // third party, with no agent exception. Server-side key only.

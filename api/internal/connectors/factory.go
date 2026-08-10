@@ -17,6 +17,8 @@ func BuildRegistry(cfg *config.Config) *Registry {
 
 	reg.Register(NewHackerNews(httpClient))
 	reg.Register(NewRSS(httpClient, nil))
+	reg.Register(NewBluesky(httpClient))
+	reg.Register(NewGDELT(httpClient))
 	reg.Register(NewStockTwits(httpClient))
 	reg.Register(NewReddit(httpClient, cfg.Reddit))
 	reg.Register(NewTwitter(httpClient, cfg.Twitter))

@@ -121,9 +121,10 @@ func TestAnalyzeTopic_NoEnabledPlatforms(t *testing.T) {
 
 type disabledConnector struct{}
 
-func (disabledConnector) ID() string              { return "disabled" }
-func (disabledConnector) DisplayName() string     { return "Disabled" }
-func (disabledConnector) Enabled() (bool, string) { return false, "missing creds" }
+func (disabledConnector) ID() string                { return "disabled" }
+func (disabledConnector) DisplayName() string       { return "Disabled" }
+func (disabledConnector) Enabled() (bool, string)   { return false, "missing creds" }
+func (disabledConnector) Policy() connectors.Policy { return connectors.Policy{} }
 func (disabledConnector) Search(context.Context, connectors.Query) ([]domain.SourcedDocument, error) {
 	return nil, nil
 }

@@ -20,9 +20,10 @@ type keyedConnector struct {
 	docCount int
 }
 
-func (c *keyedConnector) ID() string              { return c.id }
-func (c *keyedConnector) DisplayName() string     { return c.id }
-func (c *keyedConnector) Enabled() (bool, string) { return false, "missing key" }
+func (c *keyedConnector) ID() string                { return c.id }
+func (c *keyedConnector) DisplayName() string       { return c.id }
+func (c *keyedConnector) Enabled() (bool, string)   { return false, "missing key" }
+func (c *keyedConnector) Policy() connectors.Policy { return connectors.Policy{} }
 
 func (c *keyedConnector) EnabledWith(creds connectors.Credentials) (bool, string) {
 	if creds.YouTubeAPIKey != "" {

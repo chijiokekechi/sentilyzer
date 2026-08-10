@@ -99,6 +99,8 @@ SENTILYZER_USE_MOCK=true SENTILYZER_ML_USE_STUB=1 make up
 |---------------|------------------------------|-----------------------------------|-------|
 | `hackernews`  | HN Algolia search API        | none                              | yes   |
 | `rss`         | Curated RSS/Atom feeds       | none                              | yes   |
+| `bluesky`     | Bluesky post search          | none                              | yes   |
+| `gdelt`       | GDELT world news headlines   | none (1 req/5s, self-throttled)   | yes   |
 | `stocktwits`  | StockTwits cashtag stream    | none (public read)                | yes   |
 | `reddit`      | Reddit OAuth search          | `REDDIT_CLIENT_ID/SECRET`         | yes   |
 | `mastodon`    | Mastodon v2 search           | `MASTODON_ACCESS_TOKEN`           | yes   |

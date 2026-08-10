@@ -21,9 +21,10 @@ import (
 // made it all the way through transport → context → service → connector.
 type headerKeyedConnector struct{ lastKey string }
 
-func (c *headerKeyedConnector) ID() string              { return "keyed" }
-func (c *headerKeyedConnector) DisplayName() string     { return "Keyed" }
-func (c *headerKeyedConnector) Enabled() (bool, string) { return false, "missing key" }
+func (c *headerKeyedConnector) ID() string                { return "keyed" }
+func (c *headerKeyedConnector) DisplayName() string       { return "Keyed" }
+func (c *headerKeyedConnector) Enabled() (bool, string)   { return false, "missing key" }
+func (c *headerKeyedConnector) Policy() connectors.Policy { return connectors.Policy{} }
 func (c *headerKeyedConnector) EnabledWith(cr connectors.Credentials) (bool, string) {
 	if cr.YouTubeAPIKey != "" {
 		return true, ""
