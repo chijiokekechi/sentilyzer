@@ -130,6 +130,9 @@ def ingest_hn(from_month: str, to_month: str = "", limit: int = 0) -> dict:
 def prep(run_id: str) -> dict:
     from sentilyzer_ml.pipeline.prep import PrepConfig, build_training_set
 
+    # Containers see the Volume as of their start; sync to the latest commit
+    # so a warm or preemption-restarted container can't read a stale view.
+    volume.reload()
     corpus = Path(DATA) / "corpus"
     out = Path(DATA) / "runs" / run_id / "train.parquet"
     stats = build_training_set(
@@ -159,6 +162,7 @@ def label(run_id: str) -> dict:
     from sentilyzer_ml.inference import TransformerBackend
     from sentilyzer_ml.pipeline.label import label_training_set
 
+    volume.reload()  # see prep's commit even from a warm/restarted container
     if not torch.cuda.is_available():
         raise RuntimeError(
             "label() reserved a T4 but torch sees no CUDA device — refusing "
@@ -197,10 +201,18 @@ def train(run_id: str) -> dict:
     from sentilyzer_ml.pipeline.export import export_student
     from sentilyzer_ml.pipeline.kd import DistillConfig, build_student_from_teacher, distill
 
+    volume.reload()  # field-proven necessary: a preemption reshuffle handed
+    # this stage a container whose Volume view predated prep's commit
     run_dir = Path(DATA) / "runs" / run_id
+    train_parquet = run_dir / "train.parquet"
+    if not train_parquet.exists():
+        raise RuntimeError(
+            f"{train_parquet} is missing even after volume.reload() — "
+            "prep's output never landed; re-run the pipeline"
+        )
     rows = duckdb.sql(f"""
         SELECT t.text, l.p_negative, l.p_neutral, l.p_positive
-        FROM read_parquet('{run_dir / "train.parquet"}') t
+        FROM read_parquet('{train_parquet}') t
         JOIN read_parquet('{Path(DATA) / "labels" / "labels.parquet"}') l
         USING (platform, doc_id)
     """).fetchall()
@@ -270,6 +282,7 @@ def evaluate(run_id: str) -> dict:
     from sentilyzer_ml.onnx_backend import OnnxBackend
     from sentilyzer_ml.pipeline.evalgate import GateConfig, evaluate_gate
 
+    volume.reload()  # sync to train()'s committed model before reading it
     run_dir = Path(DATA) / "runs" / run_id
     rows = duckdb.sql(f"""
         SELECT t.text, l.p_negative, l.p_neutral, l.p_positive
@@ -339,6 +352,7 @@ def run_pipeline() -> dict:
 @app.function(image=cpu_image, volumes={DATA: volume}, timeout=300)
 def list_runs() -> list[dict]:
     """All runs on the Volume, newest first — for picking up a detached run."""
+    volume.reload()
     runs_dir = Path(DATA) / "runs"
     out = []
     if runs_dir.is_dir():
@@ -359,6 +373,7 @@ def list_runs() -> list[dict]:
 def read_artifact(run_id: str) -> dict[str, bytes]:
     """Hand the trained artifact back so the CLI can write it locally —
     the self-service output path needs no storage account at all."""
+    volume.reload()
     run_dir = Path(DATA) / "runs" / run_id
     out: dict[str, bytes] = {}
     for name in ("model/model.int8.onnx", "model/tokenizer.json", "eval.json",
