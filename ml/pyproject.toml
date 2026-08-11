@@ -58,6 +58,7 @@ include = ["sentilyzer_ml*"]
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+extend-exclude = ["sentilyzer_ml/gen"]  # generated protobuf stubs
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
