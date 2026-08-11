@@ -207,9 +207,19 @@ gRPC sentilyzer.v1.SentilyzerService → mirror of the above
 Topic filtering is the core of `/v1/analyze/topic`: the topic string is
 searched on each requested platform, and every matching document is scored.
 Multi-word topics work ("virtual educational tools", "iPhone battery
-complaints"). Precision is bounded by each platform's own search: a query
-like "barbershops in Austin" matches posts containing those words, not
-businesses located there; the API has no entity or geo layer.
+complaints").
+
+An optional `location=` parameter narrows results, best-effort: on keyword
+platforms it is ANDed into the query as a quoted phrase, and on GDELT a
+country name or code maps to the API's own `sourcecountry:` filter (GDELT
+is FIPS-coded internally; the gateway translates). This is keyword-level
+narrowing, not geo-tagging: "barbershops" with `location=Austin` matches
+posts mentioning both words, not businesses located there.
+
+```bash
+curl -s "localhost:8080/v1/analyze/topic?topic=barbershops&location=Austin" | jq .aggregate
+curl -s "localhost:8080/v1/analyze/topic?topic=elections&platforms=gdelt&location=Germany" | jq
+```
 
 The API deliberately keeps no server-side state, so persisting results is
 the caller's job, and it is a one-liner:
@@ -279,6 +289,9 @@ per-class-collapse floors), and downloads `model.int8.onnx` + tokenizer +
 | `--limit N`      | per-month row cap for cheap smoke runs |
 | `--corpus DIR`   | train on your own harvested corpus instead of the archive |
 | `--skip-ingest`  | reuse whatever the Volume already holds |
+| `--fresh-corpus` | wipe the Volume's corpus and re-ingest from scratch (teacher labels survive, so the rerun stays cheap; adds ~45 min) |
+| `--train-minutes N` | raise the 45-minute training cap (hard ceiling 90) |
+| `--aspect-pairs N`  | raise the 400k aspect-pair cap (hard ceiling 800k) |
 
 Repeat runs are incremental (ingested months and teacher labels are reused),
 and training is bounded by wall clock, so the bill stays ~$1/run no matter
@@ -302,17 +315,54 @@ If 8080/9090 are taken on your machine (Prometheus famously squats 9090),
 pick free ports: `SENTILYZER_HTTP_ADDR=":8098" SENTILYZER_GRPC_ADDR=":9091"
 make api-run`, then curl port 8098.
 
-Document-level sentiment comes from your student; aspect analysis keeps the
-teacher (the student's aspect head is untrained until aspect labels exist).
+Document-level sentiment always comes from your student. Aspect analysis
+comes from your student too, but only when its separate aspect gate passed:
+the trainer stamps `eval.json` with the model's sha256, and serving routes
+aspects to the student only on that bound proof. A failed or absent aspect
+gate silently keeps aspects on the teacher, which is always correct, just
+slower.
 
-## Development
+**Harvest your own corpus** (optional): the training pipeline defaults to
+the HackerNews archive, but the harvester can add the other
+policy-cleared sources to `--corpus` in the same layout:
+
+```bash
+cd api
+go run ./cmd/sentilyzer-harvest -source bluesky -out ../corpus -duration 30m
+go run ./cmd/sentilyzer-harvest -source rss    -out ../corpus
+go run ./cmd/sentilyzer-harvest -source gdelt  -out ../corpus -timespan 24h
+```
+
+Bluesky streams the public firehose (honoring delete events as corpus
+tombstones); RSS pulls the curated feed list once; GDELT stores only its
+own fields (headline, source domain, date), never linked article text,
+throttled to one request per five seconds. See `docs/corpus-policy.md`
+for what may and may not be harvested.
+
+## Development and testing
 
 ```bash
 make api-test          # Go tests
 make ml-test           # Python tests
 make test              # both
 make lint              # vet + ruff
+make e2e               # full local end-to-end: stub worker + gateway,
+                       # every protocol and format asserted
 ```
+
+What each takes, so you can pick the right check for the moment:
+
+| Check | Command | Time | Cost |
+|---|---|---|---|
+| Unit suites | `make test` | ~15 s | free |
+| End-to-end, local | `make e2e` | ~1 min | free |
+| Modal smoke run | `::main --limit 8000 ...` | ~15 min | ~$0.15 credit |
+| Full retrain (labels cached) | `::main --skip-ingest ...` | ~1 h | ~$1 credit |
+| Full retrain, fresh corpus | `::main --fresh-corpus ...` | ~2 h | ~$1.50 credit |
+| Harvest session (each source) | `sentilyzer-harvest` | 5-30 min | free |
+
+`make e2e` needs no network beyond localhost, no GPU, and no Modal account;
+it is the check to run before any commit that touches serving.
 
 ## Project layout
 

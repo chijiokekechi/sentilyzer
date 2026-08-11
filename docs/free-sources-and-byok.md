@@ -6,9 +6,9 @@ hacker-news archive; (2) the caller-supplied-key (BYOK) design, including the pe
 ToS verdicts that fixed the BYOK surface at YouTube + Mastodon only.
 
 The corpus expansion proposed in section 3 (Bluesky, GDELT headlines, HN backfill joining
-HN+RSS) is a PROPOSED AMENDMENT to the settled training-eligibility policy in
-continuous-training-plan.md. It requires explicit sign-off before any Policy.Durable flag
-flips; nothing here changes the corpus by itself. ToS drift is the norm; re-verify before
+HN+RSS) was a PROPOSED AMENDMENT when written. That sign-off happened on 2026-08-10:
+docs/corpus-policy.md is now the single source of truth for training eligibility, and
+section 6 below records what has shipped since. ToS drift is the norm; re-verify before
 relying. Engineering research, not legal advice.
 -->
 
@@ -51,7 +51,7 @@ Free API access verified by use (CLI v2.2.1); ~10,000 calls/day is a forum figur
 
 ## 3. New connectors worth building (ranked)
 
-> Note: anything marked training-eligible below is a **proposed amendment** to the settled HN+RSS-only corpus policy in docs/continuous-training-plan.md. It needs your explicit sign-off before `Policy.Durable=true` is set, not a silent flip.
+> Note: anything marked training-eligible below was a **proposed amendment** to the then-settled HN+RSS-only corpus policy in docs/continuous-training-plan.md. The sign-off has since happened: **docs/corpus-policy.md (2026-08-10)** adopted Bluesky (under four binding conditions), GDELT's own fields, and the HN backfill, held Lemmy at serving-only, and fixed a purge-and-retrain revocation rule. Per-source shipped status is noted inline and summarized in section 6.
 
 ### 1. Bluesky (highest value: the post-Twitter public-text source)
 - **Auth:** keyless worked today via `api.bsky.app/xrpc/app.bsky.feed.searchPosts` but that host is undocumented for search; the documented unauth host `public.api.bsky.app` 403s searchPosts (mid-2026 restriction). Build with an optional **free-account session** (`com.atproto.server.createSession` + app password) and an unauth fallback that paginates by walking `until` = last `createdAt` with `sort=latest`, deduping on URI (unauth cursors 403 everywhere).
@@ -60,6 +60,7 @@ Free API access verified by use (CLI v2.2.1); ~10,000 calls/day is a forum figur
 - **Serving:** yes, clean.
 - **Training:** **the only realistic candidate to join HN+RSS.** ToS (2025-08-14) has no scraping/AI/ML clause; robots.txt on both hosts affirmatively allows crawling ("Crawling the public parts of the API is allowed") and points bulk users at the firehose; Bluesky PBC states it cannot and does not forbid third-party training. This is an absence-of-prohibition argument under your own HN standard, not an affirmative grant: posts stay user-copyrighted. **Mandatory conditions** (skeptic-upgraded from optional): harvest via the free Jetstream firehose (`wss://jetstream2.us-east.bsky.network/subscribe?wantedCollections=app.bsky.feed.post`, ~850 MB/day), persist the author DID with every corpus row, and gate Durable=true behind honoring the "user intents" opt-out framework (proposal 0008, unshipped as of 2026-08-09) the day it ships. Reputational caveat: the Nov-2024 HF 1M-post backlash.
 - **Effort:** moderate: trivial HTTP search connector; the firehose harvester is a separate ingestion job.
+- **Shipped:** both halves. The serving connector is in the registry, and `api/cmd/sentilyzer-harvest` (Bluesky is the default `-source`) streams Jetstream with language/length filters and deterministic sampling, persists the **author DID on every corpus row**, honors **delete events as tombstones** and account deactivations as account-scoped tombstones: the mandatory conditions above, as bound in docs/corpus-policy.md (the proposal-0008 opt-out condition stands, to be adopted the day it ships).
 
 ### 2. GDELT DOC 2.0 (cleanest license in the entire survey)
 - **Auth:** none, no registration.
@@ -68,12 +69,14 @@ Free API access verified by use (CLI v2.2.1); ~10,000 calls/day is a forum figur
 - **Serving:** yes: "unlimited and unrestricted use for any academic, commercial, or governmental use of any kind without fee," redistribution allowed, citation required. The only affirmative grant surveyed.
 - **Training:** GDELT's own records (headline/tone/URL) are storable under its grant; headlines carry thin third-party copyright (same posture as the RSS summaries the audit already accepts). Candidate to join the corpus, but expect domain shift (headlines are not social opinion); consider using GDELT's own tone as a separate signal instead of scoring headlines through the student model.
 - **Effort:** trivial + the rate limiter.
+- **Shipped:** both a serving connector and a batch harvester (`sentilyzer-harvest -source gdelt`). Harvest rows carry **GDELT's own fields only** (headline title, source domain, seen date), never linked article text, and a ticker enforces the 1 req/5s discipline on every request including the first. **Known limitation, documented in code:** the harvester's throttle and the serving connector's throttle are independent, so a harvest running while the API answers GDELT queries from the same IP can briefly reach 2 req/5s. Harvesting is an occasional batch task; pause it if GDELT starts returning 429s.
 
 ### 3. open-index/hacker-news ingestion (dataset, not a live connector)
 - **Auth:** none (HF public dataset).
 - **Use:** one-time bulk pull of monthly parquets = **20-year training backfill** of an already-whitelisted source; optionally poll the 5-min blocks, though the existing hackernews connector already covers live serving.
 - **Serving:** redundant. **Training:** yes, as HN (rely on your audit, not the dataset's ODC-By label).
 - **Effort:** small ingestion job (DuckDB/parquet) + staleness alert; no Connector interface work.
+- **Shipped:** as the training pipeline's DEFAULT data source: the Modal app (`ml/sentilyzer_ml/pipeline/modal_app.py`) streams the archive's monthly parquets straight into a Modal Volume, incrementally by month, with `--from-month`/`--to-month` selecting the window.
 
 ### 4. Lemmy
 - **Auth:** keyless (`GET /api/v3/search?q=...&type_=Comments&sort=New`; same-day comment verified on lemmy.world). Limits are per-instance (`rate_limit_search` in `/api/v3/site`).
@@ -89,7 +92,7 @@ Free API access verified by use (CLI v2.2.1); ~10,000 calls/day is a forum figur
 
 ## 4. BYOK design spec
 
-**Providers:** YouTube + Mastodon (clean). Reddit: explicit qualified ban. Recommend dropping from v1 (see below). **X/Twitter: do not ship.**
+**Providers:** YouTube + Mastodon (clean). Reddit: explicit qualified ban. Recommend dropping from v1 (see below). **X/Twitter: do not ship.** *(Shipped exactly so: YouTube + Mastodon only; Reddit and X were never wired. Section 6 records the delivered surface.)*
 
 ### Transport: request headers, edge only
 ```
@@ -130,7 +133,33 @@ Identical names, lowercased: `x-sentilyzer-youtube-api-key`, `x-sentilyzer-masto
 - **Fresh tweets, at any price you'd call free.** Free X data ended in 2023; every mirror is stale, taken down, or both, and doubly ToS-blocked (training and redistribution). X BYOK is also contract-forbidden. Bluesky's firehose is the real version of what the Kaggle-tweets idea was reaching for.
 - **Full article text of major news.** Guardian prices sentiment analysis as a commercial use; NYT bans ML-system operation outright (serving included); free aggregator tiers are 24-hour-delayed demos; GDELT grants only its own metadata/tone: following its URLs and storing article text reintroduces each publisher's copyright.
 - **Reddit at scale without Reddit's blessing.** Server-key commercial use needs a §3.1 agreement; BYOK needs Reddit's permission (§1.4); Kaggle mirrors are license-invalid and single-maintainer-fragile. There is no free clean path.
-- **Affirmative training rights to opinion-rich social text.** Only Stack Exchange/Wikimedia content is affirmatively licensed (CC BY-SA, with attribution + ShareAlike duties); Bluesky, GDELT headlines, and Lemmy are absence-of-prohibition judgments under your own HN standard: defensible, revocable by a robots.txt edit or a shipped opt-out framework, and requiring your sign-off to amend the HN+RSS-only corpus policy.
+- **Affirmative training rights to opinion-rich social text.** Only Stack Exchange/Wikimedia content is affirmatively licensed (CC BY-SA, with attribution + ShareAlike duties); Bluesky, GDELT headlines, and Lemmy are absence-of-prohibition judgments under your own HN standard: defensible, but revocable by a robots.txt edit or a shipped opt-out framework. The sign-off amending the HN+RSS-only policy happened 2026-08-10 (docs/corpus-policy.md), paired with a purge-and-retrain revocation rule for exactly that risk.
 - **Operational overhead is not optional.** Any dataset source needs an ingestion cron + local store + staleness alerting (daily datasets die silently; takedowns to 22 bytes are real); GDELT needs a process-wide rate limiter behind your single egress IP; ToS drift is the norm this year: re-run robots.txt/ToS checks at connector startup or in CI, not annually. [likely] Kaggle's own ToS remains human-unverified behind reCAPTCHA.
 
-**Net effect if the ranked plan is adopted:** serving gains Bluesky + GDELT + Lemmy keyless connectors; BYOK ships for YouTube + Mastodon; the training corpus (pending your sign-off) expands from HN+RSS (~10k docs/day) to HN(+20-year backfill)+RSS+Bluesky+GDELT-headlines, roughly two orders of magnitude more eligible volume, with Bluesky the only genuinely opinion-rich addition.
+**Net effect now that the ranked plan is adopted (2026-08-10 sign-off):** serving gained Bluesky + GDELT keyless connectors (Lemmy stays unbuilt, held serving-only pending per-instance checks); BYOK shipped for YouTube + Mastodon; the training corpus expanded from HN+RSS (~10k docs/day) to HN(+20-year backfill)+RSS+Bluesky+GDELT-headlines, roughly two orders of magnitude more eligible volume, with Bluesky the only genuinely opinion-rich addition.
+
+---
+
+## 6. What shipped (verified in-repo 2026-08-11)
+
+The survey above stops at recommendations; this section is the delivery record, verified by reading the code.
+
+### The harvester: one binary, three sources
+
+`api/cmd/sentilyzer-harvest` writes corpus-eligible sources into the training corpus, selected by a `-source` flag, and stays a separate process from the serving gateway on purpose (the gateway persists nothing; the harvester persists rows only for sources docs/corpus-policy.md admits):
+
+- **`-source bluesky` (the default, streaming):** Jetstream firehose with language/length filters and deterministic sampling; author DID on every row; delete events become tombstones, account deactivations become account-scoped tombstones. Runs until signalled or `-duration` elapses, with a cursor file for resumption.
+- **`-source rss` (batch):** one pass over a curated feed list (overridable with `-feeds`), then exit. Rows carry **summary-level content only**: the feed's own title + summary, never the linked article body, HTML-stripped and normalized identically to the serving connector so the same item content-hashes the same on both paths. A failing feed logs and continues; a failing write aborts, because silently dropped rows are worse than a loud failure.
+- **`-source gdelt` (batch):** one throttled pass over broad default queries (overridable with `-queries`, lookback via `-timespan`), then exit. Rows carry **GDELT's own fields only** (headline title, source domain, seen date); the linked article is never fetched or stored, because that would reintroduce each publisher's copyright. A ticker gates every request, including the first, to 1 req/5s. **Known limitation:** this throttle is independent of the serving connector's, so a simultaneous harvest and serving load from one IP can briefly reach 2 req/5s; harvesting is an occasional batch task, so pause it if 429s appear.
+
+### The serving-side location filter
+
+The serving API gained a best-effort `location=` parameter, and the docs are deliberate that it is **keyword-level narrowing, not geo-tagging**: "barbershops" with `location=Austin` matches posts mentioning both words, not businesses located there.
+
+- On every keyword-search platform (hackernews, bluesky, mastodon, reddit, twitter, youtube), a non-empty location is ANDed into the platform query as a quoted phrase; the platform's own search decides what the phrase means.
+- On **GDELT**, a location that names a country (English name or two-letter code, case-insensitive) is translated to GDELT's `sourcecountry:` operator instead (GDELT's country coding is FIPS-based; the gateway owns the translation table). Anything else (cities, regions, typos) falls back to the quoted phrase.
+- On **RSS** there is no upstream search, so the filter degrades to a local substring match over the same title+description haystack the topic matches against. Connectors without a keyword query (stocktwits, mock) ignore it, and responses carry no location fields.
+
+### BYOK, as specced in section 4
+
+Shipped for **YouTube + Mastodon only**: `X-Sentilyzer-Youtube-Api-Key`, `X-Sentilyzer-Mastodon-Token`, plus an optional `X-Sentilyzer-Mastodon-Instance` override, mirrored as lowercased gRPC metadata. The lifecycle contract landed as written: credentials live in memory for one request, never logged, never persisted, never echoed into errors, never pooled across callers; the only value that outlives the request is a one-way fingerprint that partitions the cache per credential set; caller-supplied Mastodon instances must be public https hosts (private and link-local targets are refused, the SSRF guard of rule 8). Server-side keys remain the fallback when no BYOK headers arrive. Reddit and X/Twitter were dropped exactly as recommended, with the refusal rationale (X Dev Agreement III.G, Reddit Developer Terms 1.4) documented in the code and the README.
