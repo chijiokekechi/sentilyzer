@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from sentilyzer_ml.pipeline.hn_archive import (
     clean_html,
     content_sha256,
@@ -46,7 +48,7 @@ def test_last_full_month_shape():
 def test_limited_ingest_is_partial_and_redone(tmp_path, monkeypatch):
     """A --limit smoke ingest must not poison the month: month_done() stays
     False, and the next unlimited ingest replaces the truncated part files."""
-    import duckdb
+    duckdb = pytest.importorskip("duckdb")  # pipeline dep, absent in gateway CI
 
     from sentilyzer_ml.pipeline import hn_archive as hn
 
@@ -79,7 +81,7 @@ def test_limited_ingest_is_partial_and_redone(tmp_path, monkeypatch):
 def test_ingest_months_checkpoints_each_month(tmp_path, monkeypatch):
     """The Volume commit fires per finished month, so an ingest timeout keeps
     completed months instead of losing the whole range."""
-    import duckdb
+    duckdb = pytest.importorskip("duckdb")  # pipeline dep, absent in gateway CI
 
     from sentilyzer_ml.pipeline import hn_archive as hn
 
