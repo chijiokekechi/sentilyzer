@@ -203,6 +203,39 @@ class DyingTeacher(FakeTeacher):
         return super().classify(texts)
 
 
+def test_labeling_halves_long_text_batches(tmp_path):
+    """The tail of the length-sorted order is all long texts; a full batch
+    of near-max-length sequences peaked past a T4's memory in the field, so
+    chunks holding any text over 1200 chars must arrive split in half."""
+    train = tmp_path / "train.parquet"
+    labels = tmp_path / "labels.parquet"
+    duckdb.sql(f"""
+        COPY (
+            SELECT 'bluesky' AS platform,
+                   'doc-' || lpad(i::VARCHAR, 4, '0') AS doc_id,
+                   CASE WHEN i < 8 THEN repeat('x', 50 + i)
+                        ELSE repeat('y', 1500 + i) END AS text
+            FROM range(16) t(i)
+        ) TO '{train}' (FORMAT parquet)
+    """)
+
+    class SizeRecorder(FakeTeacher):
+        def __init__(self):
+            super().__init__()
+            self.batch_sizes: list[int] = []
+
+        def classify(self, texts):
+            self.batch_sizes.append(len(texts))
+            return super().classify(texts)
+
+    teacher = SizeRecorder()
+    stats = label_training_set(train, labels, teacher, batch_size=8)
+    assert stats.newly_labeled == 16
+    # Length-sorted: batch 1 is the 8 short texts (full size), the long
+    # texts arrive halved.
+    assert teacher.batch_sizes == [8, 4, 4]
+
+
 def test_labeling_flushes_survive_a_kill(tmp_path):
     """A kill mid-labeling loses at most one flush window: whatever flushed
     stays on disk (checkpoint fired), and the retry labels only the rest."""

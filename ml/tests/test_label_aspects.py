@@ -116,6 +116,42 @@ def test_cap_is_deterministic(tmp_path):
     assert len(set_a) == 12
 
 
+def test_mine_docs_cap_bounds_mining(tmp_path):
+    """Mining runs only over the deterministic doc slice: the cap bounds the
+    CPU cost (a full-corpus mine is an hour inside a billed GPU container),
+    and the same cap always selects the same documents."""
+    train = tmp_path / "train.parquet"
+    labels = tmp_path / "labels.parquet"
+    write_train_parquet(train, 12)
+
+    mined: list[str] = []
+
+    def counting_mine(text):
+        mined.append(text)
+        return ["price"]
+
+    stats = label_aspect_pairs(
+        train, labels, FakeAspectTeacher(),
+        mine=counting_mine, mine_docs_cap=5,
+    )
+    assert len(mined) == 5
+    assert (stats.total_pairs, stats.newly_labeled) == (5, 5)
+
+    first_docs = duckdb.sql(
+        f"SELECT doc_id FROM read_parquet('{labels}') ORDER BY doc_id"
+    ).fetchall()
+    # Same cap on a fresh file selects the identical slice.
+    labels2 = tmp_path / "labels2.parquet"
+    label_aspect_pairs(
+        train, labels2, FakeAspectTeacher(),
+        mine=lambda t: ["price"], mine_docs_cap=5,
+    )
+    second_docs = duckdb.sql(
+        f"SELECT doc_id FROM read_parquet('{labels2}') ORDER BY doc_id"
+    ).fetchall()
+    assert first_docs == second_docs
+
+
 class DyingAspectTeacher(FakeAspectTeacher):
     """Labels normally, then dies: a timeout/preemption stand-in."""
 

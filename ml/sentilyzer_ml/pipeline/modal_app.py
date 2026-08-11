@@ -57,7 +57,8 @@ APP_NAME = "sentilyzer-train"
 # ── THE CONSTANTS THAT BOUND THE BILL ──────────────────────────────────────
 MAX_TRAIN_SECONDS = 2_700  # 45 min on A10 ≈ $0.99/run, fixed forever
 MAX_TRAIN_SEQUENCES = 1_840_000  # asserted on CPU before any GPU spawns
-LOCK_STALE_SECONDS = 3 * 3600  # a crashed run frees the lock after this
+LOCK_STALE_SECONDS = 3 * 3600  # absolute cap: no run may hold the lock longer
+BEAT_STALE_SECONDS = 300  # a holder that stops heartbeating this long is dead
 HOLDOUT_ROWS = 5_000  # holdout ceiling; small runs scale it down (see holdout_rows)
 MIN_LABELED_ROWS = 2_500  # floor so the gate's 500-row minimum is meetable
 STUDENT_LAYERS = 6
@@ -142,15 +143,21 @@ def lock_decision(held: dict | None, now: float, input_id: str | None) -> tuple[
     """What run_pipeline should do given the current lock state.
 
     Returns ("fresh", None), ("resume", run_id), or ("skip", reason).
-    A held lock whose input_id matches ours is OUR OWN previous life — the
-    orchestrator was preempted and Modal restarted the same input — so the
-    run resumes rather than refusing itself (which stranded a healthy run
-    once: train finished as an orphan while the restart reported skipped).
+    Liveness, not identity, is the arbiter: the holder heartbeats beat_at
+    while it runs, so a lock whose beat has gone stale belongs to a dead
+    orchestrator and the caller takes that run over (every stage
+    fast-forwards from the Volume). Identity alone proved unreliable in the
+    field: Modal's preemption retry arrived with a DIFFERENT input id, so
+    the retry refused its own run while an orphaned stage kept working. The
+    input_id match is kept as the immediate path (no five-minute wait) for
+    whenever it does hold.
     """
     if not held or now - held.get("started_at", 0) >= LOCK_STALE_SECONDS:
         return ("fresh", None)
     if input_id is not None and held.get("input_id") == input_id:
         return ("resume", held["run_id"])
+    if now - held.get("beat_at", held.get("started_at", 0)) >= BEAT_STALE_SECONDS:
+        return ("resume", held["run_id"])  # holder stopped beating: take over
     age = int(now - held.get("started_at", 0))
     return ("skip", f"run {held['run_id']} already in flight ({age}s ago)")
 
@@ -508,18 +515,37 @@ def run_pipeline() -> dict:
             ),
         }
     if decision == "resume":
-        # This orchestrator was preempted and restarted with the same input.
+        # A dead orchestrator's run (or our own preempted previous life).
         # Keep the run_id; every stage fast-forwards (prep returns its
         # manifest, labels are incremental, train resumes its checkpoint).
         run_id = arg
-        print(f"orchestrator restarted; resuming {run_id}")
+        started_at = (run_lock.get("run") or {}).get("started_at", time.time())
+        print(f"taking over {run_id} (its orchestrator stopped heartbeating)")
     else:
         run_id = time.strftime("train:%Y-%m-%d-%H%M%S", time.gmtime())
+        started_at = time.time()
+
+    import threading
+
+    stop_beat = threading.Event()
+
+    def write_lock() -> None:
         run_lock["run"] = {
             "run_id": run_id,
-            "started_at": time.time(),
+            "started_at": started_at,  # original epoch: the 3h cap is absolute
+            "beat_at": time.time(),
             "input_id": modal.current_input_id(),
         }
+
+    def beat() -> None:
+        # The liveness signal lock_decision trusts: while this thread beats,
+        # rival invocations are refused; the moment we die, a successor may
+        # take the run over after BEAT_STALE_SECONDS.
+        while not stop_beat.wait(60):
+            write_lock()
+
+    write_lock()
+    threading.Thread(target=beat, daemon=True).start()
     try:
         summary: dict = {"run_id": run_id}
         summary["prep"] = prep.remote(run_id)
@@ -542,6 +568,7 @@ def run_pipeline() -> dict:
         summary["eval"] = evaluate.remote(run_id)
         return summary
     finally:
+        stop_beat.set()
         run_lock.pop("run", None)
 
 

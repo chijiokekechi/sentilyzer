@@ -122,14 +122,23 @@ def label_training_set(
         rows: list[tuple[str, str, float, float, float, str]] = []
         for start in range(0, len(window), batch_size):
             chunk = window[start : start + batch_size]
-            preds = backend.classify([r[2] for r in chunk])
-            if len(preds) != len(chunk):
-                raise RuntimeError(
-                    f"teacher returned {len(preds)} predictions for {len(chunk)} texts"
-                )
-            for (platform, doc_id, _), pred in zip(chunk, preds, strict=True):
-                p = pred.probabilities  # canonical (neg, neu, pos) per inference.py
-                rows.append((platform, doc_id, float(p[0]), float(p[1]), float(p[2]), teacher_version))
+            # Length-sorted order means the final windows are ALL long texts:
+            # a full batch of near-max-length sequences peaks past a T4's
+            # memory (observed live as a recovered 1.6GB OOM). Halve those.
+            if max(len(r[2] or "") for r in chunk) > 1200 and len(chunk) > 1:
+                mid = len(chunk) // 2
+                parts = [chunk[:mid], chunk[mid:]]
+            else:
+                parts = [chunk]
+            for part in parts:
+                preds = backend.classify([r[2] for r in part])
+                if len(preds) != len(part):
+                    raise RuntimeError(
+                        f"teacher returned {len(preds)} predictions for {len(part)} texts"
+                    )
+                for (platform, doc_id, _), pred in zip(part, preds, strict=True):
+                    p = pred.probabilities  # canonical (neg, neu, pos) per inference.py
+                    rows.append((platform, doc_id, float(p[0]), float(p[1]), float(p[2]), teacher_version))
         flush(rows)
 
     return stats

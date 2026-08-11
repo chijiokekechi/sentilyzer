@@ -43,6 +43,7 @@ def label_aspect_pairs(
     flush_every: int = 25_000,
     checkpoint=None,  # () -> None, fired after each flush lands on disk
     max_pairs: int = 400_000,
+    mine_docs_cap: int = 400_000,
     mine=None,  # (text) -> [aspect]; defaults to aspects.mine_aspects
 ) -> AspectLabelStats:
     """Label unlabeled (doc, aspect) pairs into aspect_labels_parquet (append).
@@ -68,8 +69,14 @@ def label_aspect_pairs(
     labels_path = Path(aspect_labels_parquet)
 
     con = duckdb.connect()
+    # Mining cost scales with documents mined, not pairs labeled: RAKE over a
+    # full 1.8M-row corpus is an hour of silent CPU inside a billed GPU
+    # container (observed live). Cut a deterministic doc slice first; the
+    # pair cap then applies within it.
     docs = con.sql(f"""
         SELECT platform, doc_id, text FROM read_parquet('{train_parquet}')
+        ORDER BY md5(platform || chr(31) || doc_id), platform, doc_id
+        LIMIT {mine_docs_cap}
     """).fetchall()
 
     # Keys are (platform, doc_id, aspect): dedupe what the miner returns so a

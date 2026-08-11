@@ -36,22 +36,35 @@ def test_cli_surface():
 
 
 def test_lock_decision():
-    """A preemption-restarted orchestrator must resume its own run; anyone
-    else within the stale window is refused; stale or absent locks are free."""
-    held = {"run_id": "train:x", "started_at": 1000.0, "input_id": "in-A"}
+    """Liveness arbitrates the lock: a beating holder is respected, a silent
+    one is taken over (field lesson: Modal's preemption retry carries a NEW
+    input id, so identity alone stranded a healthy run)."""
+    beating = {
+        "run_id": "train:x", "started_at": 1000.0,
+        "beat_at": 1990.0, "input_id": "in-A",
+    }
 
     assert m.lock_decision(None, 2000.0, "in-A") == ("fresh", None)
     stale = 1000.0 + m.LOCK_STALE_SECONDS
-    assert m.lock_decision(held, stale, "in-B") == ("fresh", None)
+    assert m.lock_decision(beating, stale, "in-B") == ("fresh", None)
 
-    assert m.lock_decision(held, 2000.0, "in-A") == ("resume", "train:x")
+    # Same input id: our own retry, immediate resume regardless of beat.
+    assert m.lock_decision(beating, 2000.0, "in-A") == ("resume", "train:x")
 
-    kind, reason = m.lock_decision(held, 2000.0, "in-B")
+    # Different input, holder still beating: genuinely concurrent, refuse.
+    kind, reason = m.lock_decision(beating, 2000.0, "in-B")
     assert kind == "skip" and "train:x" in reason and "1000s" in reason
-    # A lock written before input_id existed must refuse, never resume.
+
+    # Holder went silent past BEAT_STALE_SECONDS: anyone may take over.
+    dead = dict(beating, beat_at=2000.0 - m.BEAT_STALE_SECONDS)
+    assert m.lock_decision(dead, 2000.0, "in-B") == ("resume", "train:x")
+    assert m.lock_decision(dead, 2000.0, None) == ("resume", "train:x")
+
+    # Pre-heartbeat legacy lock: beat falls back to started_at, so an old
+    # one is taken over and a fresh one is still respected.
     legacy = {"run_id": "train:y", "started_at": 1000.0}
-    assert m.lock_decision(legacy, 2000.0, "in-A")[0] == "skip"
-    assert m.lock_decision(legacy, 2000.0, None)[0] == "skip"
+    assert m.lock_decision(legacy, 2000.0, "in-B") == ("resume", "train:y")
+    assert m.lock_decision(legacy, 1100.0, "in-B")[0] == "skip"
 
 
 def test_recovery_entrypoints_exist():
