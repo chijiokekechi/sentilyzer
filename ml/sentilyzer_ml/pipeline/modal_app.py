@@ -183,6 +183,11 @@ gpu_image = (
         "onnxruntime>=1.18",
         "onnx>=1.16",
         "scipy>=1.11",
+        # The ABSA teacher's tokenizer is SentencePiece-based; without these
+        # two, the fast-tokenizer conversion dies with vocab_file=None
+        # (verified live in the first aspect-labeling run).
+        "sentencepiece>=0.2",
+        "protobuf>=4",
     )
     .add_local_python_source("sentilyzer_ml")
 )
