@@ -9,6 +9,7 @@ offline, no downloads.
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 from pathlib import Path
 
@@ -24,7 +25,12 @@ from sentilyzer_ml import config as cfg  # noqa: E402
 from sentilyzer_ml import server as srv  # noqa: E402
 from sentilyzer_ml.inference import LABELS, HeuristicBackend  # noqa: E402
 from sentilyzer_ml.model_store import MODEL_FILENAME, ModelManager, Pointer  # noqa: E402
-from sentilyzer_ml.onnx_backend import ManagedBackend, OnnxBackend  # noqa: E402
+from sentilyzer_ml.onnx_backend import (  # noqa: E402
+    ManagedBackend,
+    OnnxBackend,
+    StaticStudent,
+    aspect_gate_passed,
+)
 from sentilyzer_ml.pipeline.export import export_student  # noqa: E402
 from sentilyzer_ml.pipeline.kd import build_student_from_teacher  # noqa: E402
 
@@ -252,3 +258,106 @@ def test_missing_model_dir_gives_actionable_error(tmp_path):
     assert "model.int8.onnx" in msg
     assert "--output" in msg
     assert "haven't trained yet" in msg
+
+
+def _student_dir(artifact_dir: Path, dest: Path, aspect=...) -> Path:
+    """Copy the artifact into dest; unless aspect is the ellipsis sentinel
+    (no eval.json at all), write an eval.json with that aspect verdict,
+    stamped with the copied model's sha256 the way evaluate() stamps it."""
+    dest.mkdir(parents=True, exist_ok=True)
+    for name in (MODEL_FILENAME, "tokenizer.json"):
+        shutil.copy(artifact_dir / name, dest / name)
+    if aspect is not ...:
+        sha = hashlib.sha256((dest / MODEL_FILENAME).read_bytes()).hexdigest()
+        (dest / "eval.json").write_text(
+            json.dumps({"passed": True, "aspect": aspect, "int8_sha256": sha})
+        )
+    return dest
+
+
+def test_aspect_gate_passed_requires_explicit_proof(artifact_dir, tmp_path):
+    """False on every ambiguous state: no file, unreadable JSON, no aspect
+    key, aspect null, gate failed, missing or mismatched model binding.
+    True only on a recorded pass bound to the local model's sha256."""
+    assert aspect_gate_passed(tmp_path) is False
+    eval_path = tmp_path / "eval.json"
+    eval_path.write_text("not json")
+    assert aspect_gate_passed(tmp_path) is False
+    eval_path.write_text(json.dumps({"passed": True}))  # pre-aspect eval.json
+    assert aspect_gate_passed(tmp_path) is False
+    eval_path.write_text(json.dumps({"passed": True, "aspect": None}))
+    assert aspect_gate_passed(tmp_path) is False
+    eval_path.write_text(json.dumps({"aspect": {"passed": False}}))
+    assert aspect_gate_passed(tmp_path) is False
+
+    # A passing verdict is not enough: it must be BOUND to this model.
+    shutil.copy(artifact_dir / MODEL_FILENAME, tmp_path / MODEL_FILENAME)
+    sha = hashlib.sha256((tmp_path / MODEL_FILENAME).read_bytes()).hexdigest()
+    eval_path.write_text(json.dumps({"aspect": {"passed": True}}))  # no stamp
+    assert aspect_gate_passed(tmp_path) is False
+    eval_path.write_text(
+        json.dumps({"aspect": {"passed": True}, "int8_sha256": "0" * 64})
+    )  # stale report from a different model
+    assert aspect_gate_passed(tmp_path) is False
+    eval_path.write_text(
+        json.dumps({"aspect": {"passed": True}, "int8_sha256": sha})
+    )
+    assert aspect_gate_passed(tmp_path) is True
+
+
+@pytest.mark.parametrize(
+    "aspect,student_serves",
+    [
+        (None, False),
+        ({"passed": False, "reasons": ["agreement 0.6000 < 0.75"]}, False),
+        ({"passed": True, "reasons": []}, True),
+    ],
+)
+def test_aspect_routing_follows_the_eval_gate(artifact_dir, tmp_path, aspect, student_serves):
+    """classify_aspects reaches the student ONLY when the artifact's eval.json
+    says the aspect gate passed; doc routing is independent of it."""
+    d = _student_dir(artifact_dir, tmp_path / "student", aspect)
+    base = RecordingBase()
+    backend = ManagedBackend(
+        base,
+        StaticStudent(OnnxBackend(d, intra_op_threads=1), "run-1"),
+        serve_student_aspects=aspect_gate_passed(d),
+    )
+    out = backend.classify_aspects([("the battery is great", ["battery"])])
+    assert [a for a, _ in out[0]] == ["battery"]
+    assert base.aspect_calls == (0 if student_serves else 1)
+    backend.classify(["good chair"])
+    assert base.classify_calls == 0  # the doc head always serves
+
+
+def _local_config(model_dir: Path) -> cfg.Config:
+    return cfg.Config(
+        listen_addr="[::]:0", general_model="stub", aspect_model="stub",
+        device="cpu", max_batch_size=32, max_text_chars=2000, use_stub=True,
+        model_dir=str(model_dir),
+    )
+
+
+def test_build_backend_and_ready_reflect_aspect_gate(artifact_dir, tmp_path):
+    """The SENTILYZER_ML_MODEL_DIR path wires aspect routing from eval.json,
+    and Ready() only claims 'aspects:student' when the gate passed."""
+    passed = _student_dir(artifact_dir, tmp_path / "passed", {"passed": True, "reasons": []})
+    config = _local_config(passed)
+    backend = srv.build_backend(config)
+    assert backend.serve_student_aspects is True
+    resp = srv.InferenceServicer(backend, config=config).Ready(None, None)
+    assert "student:passed" in resp.general_model
+    assert "aspects:student" in resp.general_model
+
+    failed = _student_dir(artifact_dir, tmp_path / "failed", {"passed": False, "reasons": ["x"]})
+    config = _local_config(failed)
+    backend = srv.build_backend(config)
+    assert backend.serve_student_aspects is False
+    resp = srv.InferenceServicer(backend, config=config).Ready(None, None)
+    assert "student:failed" in resp.general_model  # the doc student still serves
+    assert "aspects:student" not in resp.general_model
+
+    # A fetch that predates aspect gating ships no eval.json: same as failed.
+    bare = _student_dir(artifact_dir, tmp_path / "bare")
+    backend = srv.build_backend(_local_config(bare))
+    assert backend.serve_student_aspects is False

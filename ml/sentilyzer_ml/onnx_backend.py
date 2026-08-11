@@ -8,13 +8,15 @@ servicer never learns which backend answered.
 ManagedBackend is the piece that closes the flywheel: it routes
 document-level requests to whatever student ModelManager currently holds and
 falls back to the base backend (teachers or stub) when no student has been
-promoted yet — and ALWAYS for aspect requests, because the student's aspect
-head ships untrained until aspect labels exist in the corpus. Serving an
-untrained head would be returning noise with a confident shape.
+promoted yet. Aspect requests reach the student only when the artifact's
+eval.json proves its aspect head cleared the gate (aspect_gate_passed);
+otherwise they stay on the base, because an ungated aspect head would be
+returning noise with a confident shape.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from pathlib import Path
@@ -32,6 +34,38 @@ MAX_SEQ_LEN = 128
 
 MODEL_FILENAME = "model.int8.onnx"
 TOKENIZER_FILENAME = "tokenizer.json"
+EVAL_FILENAME = "eval.json"
+
+
+def aspect_gate_passed(model_dir: str | Path) -> bool:
+    """True only when model_dir/eval.json records a passing aspect gate FOR
+    THE MODEL SITTING IN model_dir.
+
+    The trainer writes eval.json next to the artifact and stamps it with the
+    INT8 model's sha256; the report only vouches for that exact file. A
+    missing file, unreadable JSON, an absent/null "aspect" entry, a missing
+    sha stamp, or a stamp that does not match the local model all mean
+    False: the student's aspect head serves only on explicit, bound proof it
+    cleared the gate.
+    """
+    import hashlib
+
+    model_dir = Path(model_dir)
+    try:
+        report = json.loads((model_dir / EVAL_FILENAME).read_text())
+    except (OSError, ValueError):
+        return False
+    aspect = report.get("aspect") if isinstance(report, dict) else None
+    if not (isinstance(aspect, dict) and aspect.get("passed") is True):
+        return False
+    expected = report.get("int8_sha256")
+    if not expected:
+        return False
+    try:
+        got = hashlib.sha256((model_dir / MODEL_FILENAME).read_bytes()).hexdigest()
+    except OSError:
+        return False
+    return got == expected
 
 
 def _pad_id(tok) -> int:
@@ -163,9 +197,10 @@ class ManagedBackend:
     """Routes between the hot-swappable student and the base backend.
 
     - classify: the promoted student when ModelManager holds one, else base.
-    - classify_aspects: ALWAYS base — the student's aspect head is untrained
-      (kd.py trains head_doc only) until aspect labels exist. Flip
-      serve_student_aspects once an aspect-trained student is promoted.
+    - classify_aspects: the student only when serve_student_aspects is set
+      (build_backend derives it from aspect_gate_passed on the artifact's
+      eval.json), else ALWAYS base: without gate evidence the aspect head
+      may be untrained noise.
 
     current() is one attribute read on the manager, so a promotion swaps
     between requests, never mid-request.

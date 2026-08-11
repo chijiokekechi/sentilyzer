@@ -95,6 +95,10 @@ class InferenceServicer(igrpc.InferenceServiceServicer):
         served = getattr(self.backend, "served_run_id", None)
         if callable(served) and (run_id := served()):
             general = f"student:{run_id} (fallback {general})"
+            # The aspect head serves only behind its own eval gate; say so
+            # when it is live, since aspects otherwise stay on the base.
+            if getattr(self.backend, "serve_student_aspects", False):
+                general += ", aspects:student"
         return ipb.ReadyResponse(
             ready=True,
             general_model=general,
@@ -118,16 +122,30 @@ def build_backend(config: cfg.Config):
     if config.model_dir:
         # Serve a student trained by `modal run …/modal_app.py`: point
         # SENTILYZER_ML_MODEL_DIR at its --output directory. Doc-level
-        # requests use the student; aspects keep the base backend (see
-        # ManagedBackend). On-demand: a fixed artifact, no polling.
+        # requests use the student; aspects use it too only when the run's
+        # eval.json shows the aspect gate passed, else they keep the base
+        # backend (see ManagedBackend). On-demand: a fixed artifact, no
+        # polling.
         from pathlib import Path
 
-        from .onnx_backend import ManagedBackend, OnnxBackend, StaticStudent
+        from .onnx_backend import (
+            ManagedBackend,
+            OnnxBackend,
+            StaticStudent,
+            aspect_gate_passed,
+        )
 
         student = OnnxBackend(config.model_dir, intra_op_threads=config.ort_threads)
         run_id = Path(config.model_dir).resolve().name
-        backend = ManagedBackend(backend, StaticStudent(student, run_id))
-        logger.info("serving local student from %s (run %s)", config.model_dir, run_id)
+        serve_aspects = aspect_gate_passed(config.model_dir)
+        backend = ManagedBackend(
+            backend, StaticStudent(student, run_id),
+            serve_student_aspects=serve_aspects,
+        )
+        logger.info(
+            "serving local student from %s (run %s, aspects=%s)",
+            config.model_dir, run_id, "student" if serve_aspects else "base",
+        )
     return backend
 
 

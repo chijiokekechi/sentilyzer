@@ -60,6 +60,12 @@ def fake_tokenize(batch: list[str]):
     }
 
 
+def fake_tokenize_pair(batch: list[tuple[str, str]]):
+    """Deterministic pair encoding: text and aspect joined by a separator
+    char, through the same char-level scheme as fake_tokenize."""
+    return fake_tokenize([f"{text} | {aspect}" for text, aspect in batch])
+
+
 def test_layer_indices_match_distilbert_strategy():
     assert student_layer_indices(12, 6) == [0, 2, 4, 6, 8, 10]
     assert student_layer_indices(4, 2) == [0, 2]
@@ -150,6 +156,19 @@ def _toy_task(n=96):
     return texts, torch.tensor(probs, dtype=torch.float32)
 
 
+def _toy_aspect_task(n=48):
+    """(text, aspect) pairs whose teacher label is recoverable from the aspect."""
+    words = ["awful", "chair", "amazing"]
+    pairs, probs = [], []
+    for i in range(n):
+        cls = i % 3
+        pairs.append((f"the {words[cls]} thing #{i}", words[cls]))
+        p = [0.05, 0.05, 0.05]
+        p[cls] = 0.9
+        probs.append(p)
+    return pairs, torch.tensor(probs, dtype=torch.float32)
+
+
 def test_distill_learns_and_respects_budget(teacher, tmp_path):
     texts, probs = _toy_task()
     student = build_student_from_teacher(teacher, student_layers=2)
@@ -172,6 +191,26 @@ def test_distill_device_contract(teacher, tmp_path):
     assert result.device == "cpu"
     state = torch.load(tmp_path / "ckpt" / "checkpoint.pt", weights_only=True, map_location="cpu")
     assert "rng" in state and "rng_cuda" not in state
+
+
+def test_distill_rejects_out_of_range_aspect_fraction(teacher, tmp_path):
+    """Above 0.5 the interleave period rounds to 1 or 0 (crash), and 0 with
+    aspect data present means the data silently never trains: both are
+    caller errors and must fail loudly."""
+    texts, probs = _toy_task()
+    pairs, a_probs = _toy_aspect_task()
+    student = build_student_from_teacher(teacher, student_layers=2)
+    for bad in (0.0, 0.6, 1.0, 2.0):
+        cfg = DistillConfig(
+            batch_size=16, max_seconds=60, max_sequences=64, seed=7,
+            aspect_fraction=bad,
+        )
+        with pytest.raises(ValueError, match="aspect_fraction"):
+            distill(
+                student, texts, probs, fake_tokenize, cfg, tmp_path / "ckpt",
+                aspect_pairs=pairs, aspect_probs=a_probs,
+                tokenize_pair=fake_tokenize_pair,
+            )
 
 
 def test_distill_sequence_budget_stops_early(teacher, tmp_path):
@@ -218,3 +257,127 @@ def test_distill_resume_reproduces_uninterrupted_run(teacher, tmp_path):
 
     for p_full, p_res in zip(uninterrupted.parameters(), interrupted.parameters(), strict=True):
         torch.testing.assert_close(p_full, p_res, rtol=1e-4, atol=1e-5)
+
+
+def test_distill_without_aspect_data_is_unchanged(teacher, tmp_path):
+    """The aspect extension must be invisible when no aspect data is passed:
+    from the same seed, an old-style call and an explicit aspect_pairs=None
+    call produce the exact same losses and weights, and the checkpoint keeps
+    the exact pre-aspect key set."""
+    texts, probs = _toy_task()
+    cfg = DistillConfig(temperature=3.0, lr=5e-3, batch_size=16, max_seconds=60, max_sequences=10_000, seed=7)
+
+    torch.manual_seed(0)
+    old_style = build_student_from_teacher(teacher, student_layers=2)
+    r_old = distill(old_style, texts, probs, fake_tokenize, cfg, tmp_path / "old")
+
+    torch.manual_seed(0)
+    new_style = build_student_from_teacher(teacher, student_layers=2)
+    r_new = distill(
+        new_style, texts, probs, fake_tokenize, cfg, tmp_path / "new",
+        aspect_pairs=None, aspect_probs=None, tokenize_pair=None,
+    )
+    assert r_new.losses == r_old.losses  # exact float equality, not approx
+    assert r_new.steps == r_old.steps
+    assert r_new.sequences_seen == r_old.sequences_seen
+    assert r_new.aspect_sequences_seen == 0
+    for p_old, p_new in zip(old_style.parameters(), new_style.parameters(), strict=True):
+        assert torch.equal(p_old, p_new)
+
+    # A budget-stopped no-aspect run must write a checkpoint with only the
+    # pre-aspect keys, so old and new payloads stay interchangeable.
+    torch.manual_seed(0)
+    stopped = build_student_from_teacher(teacher, student_layers=2)
+    cfg_stop = DistillConfig(batch_size=16, max_seconds=60, max_sequences=32, seed=7)
+    distill(stopped, texts, probs, fake_tokenize, cfg_stop, tmp_path / "stop")
+    state = torch.load(tmp_path / "stop" / "checkpoint.pt", weights_only=True, map_location="cpu")
+    assert set(state) == {"model", "optimizer", "rng", "next_batch", "steps", "sequences_seen"}
+
+
+def test_distill_interleaves_aspect_and_doc_steps(teacher, tmp_path):
+    """aspect_fraction=0.5 with 4 doc and 2 aspect batches: aspect slots are
+    k=0 and k=2, and the exhausted aspect stream falls back to doc steps."""
+    texts, probs = _toy_task(n=64)
+    pairs, a_probs = _toy_aspect_task(n=32)
+    student = build_student_from_teacher(teacher, student_layers=2)
+    kinds: list[str] = []
+
+    def counting_tokenize(batch):
+        kinds.append("doc")
+        return fake_tokenize(batch)
+
+    def counting_tokenize_pair(batch):
+        kinds.append("aspect")
+        return fake_tokenize_pair(batch)
+
+    cfg = DistillConfig(lr=5e-3, batch_size=16, max_seconds=60, max_sequences=10_000, seed=7, aspect_fraction=0.5)
+    result = distill(
+        student, texts, probs, counting_tokenize, cfg, tmp_path / "ckpt",
+        aspect_pairs=pairs, aspect_probs=a_probs, tokenize_pair=counting_tokenize_pair,
+    )
+    assert kinds == ["aspect", "doc", "aspect", "doc", "doc", "doc"]
+    assert result.steps == 6
+    assert not result.partial
+
+
+def test_distill_aspect_resume_reproduces_uninterrupted_run(teacher, tmp_path):
+    """Budget-stop on the interleave boundary, then resume: the combined
+    trajectory must land where a single uninterrupted run lands: same slot
+    pattern, same aspect batches, same weights."""
+    texts, probs = _toy_task()
+    pairs, a_probs = _toy_aspect_task()
+    aspect_kw = {"aspect_pairs": pairs, "aspect_probs": a_probs, "tokenize_pair": fake_tokenize_pair}
+    cfg_full = DistillConfig(temperature=3.0, lr=5e-3, batch_size=16, max_seconds=1e9, max_sequences=10_000, seed=7, aspect_fraction=0.5)
+
+    torch.manual_seed(0)
+    uninterrupted = build_student_from_teacher(teacher, student_layers=2)
+    r_full = distill(uninterrupted, texts, probs, fake_tokenize, cfg_full, tmp_path / "full", **aspect_kw)
+
+    torch.manual_seed(0)
+    interrupted = build_student_from_teacher(teacher, student_layers=2)
+    cfg_half = DistillConfig(temperature=3.0, lr=5e-3, batch_size=16, max_seconds=1e9, max_sequences=48, seed=7, aspect_fraction=0.5)
+    r1 = distill(interrupted, texts, probs, fake_tokenize, cfg_half, tmp_path / "resume", **aspect_kw)
+    assert r1.partial and r1.sequences_seen == 48
+    # Stopped after steps A,D,A: the checkpoint must carry the slot counter
+    # and the aspect cursor so the resume lands on the k=3 doc slot.
+    state = torch.load(tmp_path / "resume" / "checkpoint.pt", weights_only=True, map_location="cpu")
+    assert state["executed_steps"] == 3
+    assert state["next_aspect_batch"] == 2
+    assert state["aspect_sequences_seen"] == 32
+
+    r2 = distill(interrupted, texts, probs, fake_tokenize, cfg_full, tmp_path / "resume", **aspect_kw)
+    assert r2.resumed
+    assert r2.sequences_seen == r_full.sequences_seen
+    assert r2.aspect_sequences_seen == r_full.aspect_sequences_seen
+
+    for p_full, p_res in zip(uninterrupted.parameters(), interrupted.parameters(), strict=True):
+        torch.testing.assert_close(p_full, p_res, rtol=1e-4, atol=1e-5)
+
+
+def test_distill_aspect_sequences_seen_accounting(teacher, tmp_path):
+    """Both step kinds count toward sequences_seen and the budgets; aspect
+    steps also increment aspect_sequences_seen."""
+    texts, probs = _toy_task(n=96)
+    pairs, a_probs = _toy_aspect_task(n=32)
+    student = build_student_from_teacher(teacher, student_layers=2)
+    cfg = DistillConfig(lr=5e-3, batch_size=16, max_seconds=60, max_sequences=10_000, seed=7, aspect_fraction=0.25)
+    result = distill(
+        student, texts, probs, fake_tokenize, cfg, tmp_path / "ckpt",
+        aspect_pairs=pairs, aspect_probs=a_probs, tokenize_pair=fake_tokenize_pair,
+    )
+    # Slots k=0 and k=4 are aspect (period 4); all 6 doc batches still run.
+    assert result.aspect_sequences_seen == 32
+    assert result.sequences_seen == 96 + 32
+    assert result.steps == 8
+    assert not result.partial
+
+    # The sequence budget counts aspect sequences too: A(16) + D(16) hits 32.
+    student2 = build_student_from_teacher(teacher, student_layers=2)
+    cfg_stop = DistillConfig(lr=5e-3, batch_size=16, max_seconds=60, max_sequences=32, seed=7, aspect_fraction=0.5)
+    result2 = distill(
+        student2, texts, probs, fake_tokenize, cfg_stop, tmp_path / "stop",
+        aspect_pairs=pairs, aspect_probs=a_probs, tokenize_pair=fake_tokenize_pair,
+    )
+    assert result2.partial
+    assert result2.sequences_seen == 32
+    assert result2.aspect_sequences_seen == 16

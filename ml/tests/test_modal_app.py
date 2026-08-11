@@ -61,3 +61,45 @@ def test_recovery_entrypoints_exist():
         assert hasattr(m, name), name
     fetch_fn = m.fetch.info.raw_f
     assert list(inspect.signature(fetch_fn).parameters) == ["run_id", "output"]
+
+
+def test_aspect_constants():
+    """The aspect stage is pinned to the frozen ABSA teacher and a bounded
+    pair budget; drift here changes the bill or the label distribution."""
+    assert m.ASPECT_TEACHER_MODEL == "yangheng/deberta-v3-base-absa-v1.1"
+    assert m.ASPECT_PAIR_CAP == 400_000
+    assert m.HOLDOUT_PAIRS == 2_000
+
+
+def test_holdout_pairs_floor():
+    """Same 20%-up-to-cap rule as holdout_rows, but it never raises: aspects
+    are optional, so a tiny pair count fails the aspect gate on its row
+    minimum instead of killing the run."""
+    assert m.holdout_pairs(10_000) == 2_000
+    assert m.holdout_pairs(1_000_000) == m.HOLDOUT_PAIRS  # capped
+    assert m.holdout_pairs(1_000) == 200
+    assert m.holdout_pairs(4) == 0
+    assert m.holdout_pairs(0) == 0
+
+
+def test_label_aspects_stage_surface():
+    """The stage exists, takes only run_id, and the orchestrator runs it
+    after doc labeling with the same single timeout retry."""
+    fn = m.label_aspects_stage.info.raw_f
+    assert list(inspect.signature(fn).parameters) == ["run_id"]
+    src = inspect.getsource(m.run_pipeline.info.raw_f)
+    assert 'summary["label_aspects"]' in src
+    assert src.count("label_aspects_stage.remote(run_id)") == 2  # call + one retry
+    assert src.index("label.remote") < src.index("label_aspects_stage.remote")
+    assert src.index("label_aspects_stage.remote") < src.index("train.remote")
+
+
+def test_train_and_eval_share_the_aspect_join():
+    """The gate's held-out tail only means something if train and evaluate
+    read pairs identically: both must go through aspect_join_sql, and the
+    join's order must be deterministic."""
+    assert "aspect_join_sql" in inspect.getsource(m.train.info.raw_f)
+    assert "aspect_join_sql" in inspect.getsource(m.evaluate.info.raw_f)
+    sql = m.aspect_join_sql("t.parquet", "a.parquet")
+    assert "ORDER BY md5" in sql
+    assert "USING (platform, doc_id)" in sql

@@ -45,6 +45,7 @@ class DistillConfig:
     temperature: float = 3.0
     lr: float = 5e-5
     batch_size: int = 32
+    aspect_fraction: float = 0.25  # fraction of steps on aspect batches, when aspect data is present
     max_seconds: float = 2700.0
     max_sequences: int = 1_840_000
     checkpoint_every_steps: int = 500
@@ -56,6 +57,7 @@ class DistillConfig:
 class DistillResult:
     steps: int = 0
     sequences_seen: int = 0
+    aspect_sequences_seen: int = 0
     partial: bool = False  # stopped by budget rather than data exhaustion
     resumed: bool = False
     final_loss: float = math.nan
@@ -160,15 +162,37 @@ def distill(
     cfg: DistillConfig,
     checkpoint_dir: str | Path,
     clock=time.monotonic,
+    *,
+    aspect_pairs: list[tuple[str, str]] | None = None,  # (text, aspect) pairs
+    aspect_probs: torch.Tensor | None = None,  # (N, 3) float32, aligned with aspect_pairs
+    tokenize_pair=None,  # (list[tuple[str, str]]) -> dict of tensors, text-pair encoding
 ) -> DistillResult:
-    """Train the doc head on soft labels under wall-clock/sequence budgets.
+    """Train the doc head, and optionally the aspect head, on soft labels
+    under wall-clock/sequence budgets.
 
     The checkpoint is keyed to checkpoint_dir — the CALLER names it after the
     candidate run, so a preempted attempt resumes instead of restarting, and
     a different run never resumes a stranger's checkpoint.
+
+    With aspect data, every round(1/aspect_fraction)-th executed step trains
+    the aspect head on a (text, aspect) batch instead of a doc batch; once
+    the aspect stream exhausts, the remaining steps are doc steps. Without
+    aspect data the behavior is exactly the doc-only path.
     """
     if len(texts) != teacher_probs.shape[0]:
         raise ValueError("texts and teacher_probs must align")
+    if aspect_pairs is not None:
+        if aspect_probs is None or tokenize_pair is None:
+            raise ValueError("aspect_pairs requires aspect_probs and tokenize_pair")
+        if len(aspect_pairs) != aspect_probs.shape[0]:
+            raise ValueError("aspect_pairs and aspect_probs must align")
+        if not 0 < cfg.aspect_fraction <= 0.5:
+            # Above 0.5, round(1/f) collapses to 1 (every step) or 0 (division
+            # by zero at the modulo), neither of which means "fraction".
+            raise ValueError(
+                f"aspect_fraction must be in (0, 0.5] when aspect data is "
+                f"present, got {cfg.aspect_fraction}"
+            )
     ckpt_dir = Path(checkpoint_dir)
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     ckpt_path = ckpt_dir / "checkpoint.pt"
@@ -183,6 +207,8 @@ def distill(
     optimizer = torch.optim.AdamW(student.parameters(), lr=cfg.lr)
     result = DistillResult(device=cfg.device)
     start_batch = 0
+    executed = 0  # executed-step counter: picks the interleave slot for step k
+    aspect_cursor = 0  # aspect batches consumed from the seed+1 stream
 
     if ckpt_path.exists():
         # Always load to CPU: load_state_dict copies into the (possibly CUDA)
@@ -199,6 +225,10 @@ def distill(
         start_batch = state["next_batch"]
         result.steps = state["steps"]
         result.sequences_seen = state["sequences_seen"]
+        # Pre-aspect checkpoints lack these keys; missing means zero.
+        executed = state.get("executed_steps", 0)
+        aspect_cursor = state.get("next_aspect_batch", 0)
+        result.aspect_sequences_seen = state.get("aspect_sequences_seen", 0)
         result.resumed = True
     else:
         torch.manual_seed(cfg.seed)
@@ -216,34 +246,72 @@ def distill(
             "steps": result.steps,
             "sequences_seen": result.sequences_seen,
         }
+        if aspect_pairs is not None:
+            # Resume must land on the same interleave slot and aspect batch;
+            # a no-aspect run keeps the exact pre-aspect payload.
+            payload["executed_steps"] = executed
+            payload["next_aspect_batch"] = aspect_cursor
+            payload["aspect_sequences_seen"] = result.aspect_sequences_seen
         if device.type == "cuda":
             # CUDA dropout draws from the device RNG — resume needs it too.
             payload["rng_cuda"] = torch.cuda.get_rng_state(device)
         torch.save(payload, tmp)
         tmp.replace(ckpt_path)  # atomic: a crash never truncates a good checkpoint
 
-    for batch_no, idx in enumerate(_batches(len(texts), cfg.batch_size, cfg.seed)):
-        if batch_no < start_batch:
-            continue  # replay the deterministic order up to the resume point
+    doc_iter = _batches(len(texts), cfg.batch_size, cfg.seed)
+    for _ in range(start_batch):
+        next(doc_iter, None)  # replay the deterministic order up to the resume point
+    doc_cursor = start_batch
+
+    aspect_iter = None
+    period = 1
+    if aspect_pairs is not None and cfg.aspect_fraction > 0:
+        period = round(1 / cfg.aspect_fraction)
+        aspect_iter = _batches(len(aspect_pairs), cfg.batch_size, cfg.seed + 1)
+        for _ in range(aspect_cursor):
+            next(aspect_iter, None)
+
+    while True:
+        # Executed step k is an aspect step iff k % round(1/aspect_fraction)
+        # == 0; an exhausted aspect stream falls back to doc steps.
+        aspect_step = aspect_iter is not None and executed % period == 0
+        idx = next(aspect_iter, None) if aspect_step else None
+        if idx is None:
+            aspect_step = False
+            idx = next(doc_iter, None)
+            if idx is None:
+                break  # doc data exhausted: the run is complete
         if clock() - started >= cfg.max_seconds or result.sequences_seen >= cfg.max_sequences:
             result.partial = True
-            save(batch_no)
+            save(doc_cursor)
             break
 
-        enc = tokenize([texts[i] for i in idx])
-        probs = teacher_probs[idx].to(device)
-        logits_doc, _ = student(enc["input_ids"].to(device), enc["attention_mask"].to(device))
-        loss = kd_loss(logits_doc, probs, cfg.temperature)
+        if aspect_step:
+            enc = tokenize_pair([aspect_pairs[i] for i in idx])
+            probs = aspect_probs[idx].to(device)
+            _, logits_aspect = student(enc["input_ids"].to(device), enc["attention_mask"].to(device))
+            loss = kd_loss(logits_aspect, probs, cfg.temperature)
+        else:
+            enc = tokenize([texts[i] for i in idx])
+            probs = teacher_probs[idx].to(device)
+            logits_doc, _ = student(enc["input_ids"].to(device), enc["attention_mask"].to(device))
+            loss = kd_loss(logits_doc, probs, cfg.temperature)
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
+        executed += 1
         result.steps += 1
         result.sequences_seen += len(idx)
+        if aspect_step:
+            aspect_cursor += 1
+            result.aspect_sequences_seen += len(idx)
+        else:
+            doc_cursor += 1
         result.losses.append(loss.detach().item())
         if result.steps % cfg.checkpoint_every_steps == 0:
-            save(batch_no + 1)
+            save(doc_cursor)
 
     if result.losses:
         result.final_loss = result.losses[-1]
