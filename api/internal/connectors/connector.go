@@ -22,6 +22,9 @@ type Query struct {
 	Limit        int
 	Language     string
 	SinceSeconds int64
+	// Location is a best-effort keyword filter, not geo-tagging. How each
+	// connector folds it into its platform query is defined in location.go.
+	Location string
 	// Creds are the caller's own API keys, if any. A CredentialedConnector
 	// prefers these over its server-side configuration for the one request;
 	// keyless connectors ignore them.

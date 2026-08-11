@@ -153,6 +153,9 @@ type AnalyzeTopicRequest struct {
 	Aspects          []string
 	Language         string
 	SinceSeconds     int64
+	// Location is a best-effort keyword filter; how each connector maps it
+	// onto its platform query lives in connectors/location.go.
+	Location string
 	// Creds are caller-supplied API keys ("bring your own key"). They enable
 	// keyed connectors the server has no credentials for, for this request
 	// only. Never logged, never persisted; the cache key carries only their
@@ -355,6 +358,7 @@ func (s *Service) fanout(
 		Limit:        req.LimitPerPlatform,
 		Language:     req.Language,
 		SinceSeconds: req.SinceSeconds,
+		Location:     req.Location,
 		Creds:        req.Creds,
 	}
 	timeout := s.connectorTimeout()
@@ -405,6 +409,10 @@ func buildCacheKey(req AnalyzeTopicRequest) string {
 		fmt.Sprintf("limit=%d", req.LimitPerPlatform),
 		fmt.Sprintf("lang=%s", req.Language),
 		fmt.Sprintf("since=%d", req.SinceSeconds),
+		// Location changes what the connectors are asked for, so a located
+		// request must never be answered from an unlocated entry (or vice
+		// versa).
+		"location=" + strings.ToLower(strings.TrimSpace(req.Location)),
 		// Cache isolation between credential sets: a result fetched with one
 		// caller's keys covers platforms another caller cannot see, so the key
 		// must vary with the credentials — as a one-way fingerprint, never the

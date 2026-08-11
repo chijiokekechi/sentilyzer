@@ -139,7 +139,7 @@ func (m *Mastodon) Search(ctx context.Context, q Query) ([]domain.SourcedDocumen
 	base := strings.TrimRight(instance, "/") + "/api/v2/search"
 	u, _ := url.Parse(base)
 	v := u.Query()
-	v.Set("q", q.Topic)
+	v.Set("q", andLocation(q.Topic, q.Location))
 	v.Set("type", "statuses")
 	v.Set("limit", strconv.Itoa(limit))
 	u.RawQuery = v.Encode()

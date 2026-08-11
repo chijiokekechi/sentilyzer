@@ -113,6 +113,15 @@ func (g *GDELT) Search(ctx context.Context, q Query) ([]domain.SourcedDocument, 
 	// Multi-word topics must be quoted or GDELT rejects the query with
 	// "please connect terms with OR/AND".
 	query := `"` + strings.ReplaceAll(q.Topic, `"`, ``) + `"`
+	// A location naming a country (name or ISO alpha-2 code) becomes GDELT's
+	// sourcecountry: operator with the FIPS 10-4 code GDELT expects; anything
+	// else falls back to the quoted-phrase AND every other keyword connector
+	// uses (location.go).
+	if code, ok := countryFIPS(q.Location); ok {
+		query += " sourcecountry:" + code
+	} else {
+		query = andLocation(query, q.Location)
+	}
 	if name, ok := gdeltLangs[strings.ToLower(q.Language)]; ok {
 		query += " sourcelang:" + name
 	}

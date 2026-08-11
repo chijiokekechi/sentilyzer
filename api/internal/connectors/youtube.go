@@ -88,7 +88,7 @@ func (y *YouTube) Search(ctx context.Context, q Query) ([]domain.SourcedDocument
 	u, _ := url.Parse("https://www.googleapis.com/youtube/v3/search")
 	v := u.Query()
 	v.Set("part", "snippet")
-	v.Set("q", q.Topic)
+	v.Set("q", andLocation(q.Topic, q.Location))
 	v.Set("maxResults", strconv.Itoa(limit))
 	v.Set("type", "video")
 	v.Set("key", y.keyFor(q))

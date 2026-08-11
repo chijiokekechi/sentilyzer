@@ -545,7 +545,12 @@ type AnalyzeTopicRequest struct {
 	// ISO 639-1 language filter; empty = any.
 	Language string `protobuf:"bytes,5,opt,name=language,proto3" json:"language,omitempty"`
 	// Optional time window in seconds (0 = no limit).
-	SinceSeconds  int64 `protobuf:"varint,6,opt,name=since_seconds,json=sinceSeconds,proto3" json:"since_seconds,omitempty"`
+	SinceSeconds int64 `protobuf:"varint,6,opt,name=since_seconds,json=sinceSeconds,proto3" json:"since_seconds,omitempty"`
+	// Optional best-effort location filter. This is KEYWORD matching, not
+	// geo-tagging: each keyword-search connector ANDs it into the platform
+	// query as a quoted phrase, and GDELT maps recognized country names/codes
+	// onto its sourcecountry: operator (see api/internal/connectors/location.go).
+	Location      string `protobuf:"bytes,7,opt,name=location,proto3" json:"location,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -620,6 +625,13 @@ func (x *AnalyzeTopicRequest) GetSinceSeconds() int64 {
 		return x.SinceSeconds
 	}
 	return 0
+}
+
+func (x *AnalyzeTopicRequest) GetLocation() string {
+	if x != nil {
+		return x.Location
+	}
+	return ""
 }
 
 // Warning records a platform that contributed nothing because it failed or
@@ -1188,14 +1200,15 @@ const file_sentilyzer_v1_sentilyzer_proto_rawDesc = "" +
 	"\n" +
 	"source_url\x18\x03 \x01(\tR\tsourceUrl\x12\x16\n" +
 	"\x06author\x18\x04 \x01(\tR\x06author\x127\n" +
-	"\tposted_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\bpostedAt\"\xd2\x01\n" +
+	"\tposted_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\bpostedAt\"\xee\x01\n" +
 	"\x13AnalyzeTopicRequest\x12\x14\n" +
 	"\x05topic\x18\x01 \x01(\tR\x05topic\x12\x1c\n" +
 	"\tplatforms\x18\x02 \x03(\tR\tplatforms\x12,\n" +
 	"\x12limit_per_platform\x18\x03 \x01(\x05R\x10limitPerPlatform\x12\x18\n" +
 	"\aaspects\x18\x04 \x03(\tR\aaspects\x12\x1a\n" +
 	"\blanguage\x18\x05 \x01(\tR\blanguage\x12#\n" +
-	"\rsince_seconds\x18\x06 \x01(\x03R\fsinceSeconds\"?\n" +
+	"\rsince_seconds\x18\x06 \x01(\x03R\fsinceSeconds\x12\x1a\n" +
+	"\blocation\x18\a \x01(\tR\blocation\"?\n" +
 	"\aWarning\x12\x1a\n" +
 	"\bplatform\x18\x01 \x01(\tR\bplatform\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\"\xc8\x04\n" +

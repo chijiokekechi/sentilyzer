@@ -70,7 +70,7 @@ func (h *HackerNews) Search(ctx context.Context, q Query) ([]domain.SourcedDocum
 	}
 	u, _ := url.Parse(endpoint)
 	v := u.Query()
-	v.Set("query", q.Topic)
+	v.Set("query", andLocation(q.Topic, q.Location))
 	v.Set("hitsPerPage", strconv.Itoa(limit))
 	v.Set("tags", "(story,comment)")
 	if q.SinceSeconds > 0 {

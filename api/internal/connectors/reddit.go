@@ -141,7 +141,7 @@ func (r *Reddit) Search(ctx context.Context, q Query) ([]domain.SourcedDocument,
 
 	u, _ := url.Parse("https://oauth.reddit.com/search")
 	v := u.Query()
-	v.Set("q", q.Topic)
+	v.Set("q", andLocation(q.Topic, q.Location))
 	v.Set("limit", strconv.Itoa(limit))
 	v.Set("sort", "relevance")
 	v.Set("type", "link")

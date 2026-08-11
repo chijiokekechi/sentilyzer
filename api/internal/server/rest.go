@@ -176,6 +176,8 @@ type analyzeTopicDTO struct {
 	Aspects          []string `json:"aspects,omitempty" xml:"aspects>aspect,omitempty"`
 	Language         string   `json:"language,omitempty" xml:"language,omitempty"`
 	SinceSeconds     int64    `json:"since_seconds,omitempty" xml:"since_seconds,omitempty"`
+	// Best-effort keyword location filter; see connectors/location.go.
+	Location string `json:"location,omitempty" xml:"location,omitempty"`
 }
 
 func (r *REST) handleAnalyzeTopic(w http.ResponseWriter, req *http.Request) {
@@ -192,6 +194,7 @@ func (r *REST) handleAnalyzeTopicGET(w http.ResponseWriter, req *http.Request) {
 	body := analyzeTopicDTO{
 		Topic:    q.Get("topic"),
 		Language: q.Get("language"),
+		Location: q.Get("location"),
 	}
 	if v := q.Get("platforms"); v != "" {
 		body.Platforms = splitAndTrim(v)
@@ -224,6 +227,7 @@ func (r *REST) runTopic(w http.ResponseWriter, req *http.Request, body analyzeTo
 		Aspects:          body.Aspects,
 		Language:         body.Language,
 		SinceSeconds:     body.SinceSeconds,
+		Location:         body.Location,
 		Creds:            CredsFromContext(req.Context()),
 	})
 	if err != nil {

@@ -78,7 +78,7 @@ func (t *Twitter) Search(ctx context.Context, q Query) ([]domain.SourcedDocument
 
 	u, _ := url.Parse("https://api.twitter.com/2/tweets/search/recent")
 	v := u.Query()
-	query := q.Topic + " -is:retweet"
+	query := andLocation(q.Topic, q.Location) + " -is:retweet"
 	if q.Language != "" {
 		query += " lang:" + q.Language
 	}

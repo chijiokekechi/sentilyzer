@@ -112,20 +112,22 @@ class SourcedDocument(_message.Message):
     def __init__(self, document: _Optional[_Union[Document, _Mapping]] = ..., platform: _Optional[str] = ..., source_url: _Optional[str] = ..., author: _Optional[str] = ..., posted_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
 class AnalyzeTopicRequest(_message.Message):
-    __slots__ = ("topic", "platforms", "limit_per_platform", "aspects", "language", "since_seconds")
+    __slots__ = ("topic", "platforms", "limit_per_platform", "aspects", "language", "since_seconds", "location")
     TOPIC_FIELD_NUMBER: _ClassVar[int]
     PLATFORMS_FIELD_NUMBER: _ClassVar[int]
     LIMIT_PER_PLATFORM_FIELD_NUMBER: _ClassVar[int]
     ASPECTS_FIELD_NUMBER: _ClassVar[int]
     LANGUAGE_FIELD_NUMBER: _ClassVar[int]
     SINCE_SECONDS_FIELD_NUMBER: _ClassVar[int]
+    LOCATION_FIELD_NUMBER: _ClassVar[int]
     topic: str
     platforms: _containers.RepeatedScalarFieldContainer[str]
     limit_per_platform: int
     aspects: _containers.RepeatedScalarFieldContainer[str]
     language: str
     since_seconds: int
-    def __init__(self, topic: _Optional[str] = ..., platforms: _Optional[_Iterable[str]] = ..., limit_per_platform: _Optional[int] = ..., aspects: _Optional[_Iterable[str]] = ..., language: _Optional[str] = ..., since_seconds: _Optional[int] = ...) -> None: ...
+    location: str
+    def __init__(self, topic: _Optional[str] = ..., platforms: _Optional[_Iterable[str]] = ..., limit_per_platform: _Optional[int] = ..., aspects: _Optional[_Iterable[str]] = ..., language: _Optional[str] = ..., since_seconds: _Optional[int] = ..., location: _Optional[str] = ...) -> None: ...
 
 class Warning(_message.Message):
     __slots__ = ("platform", "message")

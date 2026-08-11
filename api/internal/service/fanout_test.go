@@ -14,13 +14,15 @@ import (
 )
 
 // scriptedConnector plays a fixed part in a fanout: return docs, return an
-// error, or hang until its context expires.
+// error, or hang until its context expires. It records the last Query it was
+// handed so tests can assert what actually reached the connector.
 type scriptedConnector struct {
-	id    string
-	docs  int
-	err   error
-	hang  bool
-	calls int
+	id        string
+	docs      int
+	err       error
+	hang      bool
+	calls     int
+	lastQuery connectors.Query
 }
 
 func (c *scriptedConnector) ID() string                { return c.id }
@@ -28,8 +30,9 @@ func (c *scriptedConnector) DisplayName() string       { return c.id }
 func (c *scriptedConnector) Enabled() (bool, string)   { return true, "" }
 func (c *scriptedConnector) Policy() connectors.Policy { return connectors.Policy{} }
 
-func (c *scriptedConnector) Search(ctx context.Context, _ connectors.Query) ([]domain.SourcedDocument, error) {
+func (c *scriptedConnector) Search(ctx context.Context, q connectors.Query) ([]domain.SourcedDocument, error) {
 	c.calls++
+	c.lastQuery = q
 	if c.hang {
 		// Outlive any sane deadline; the fanout is expected to give up first.
 		select {

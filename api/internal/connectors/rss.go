@@ -67,6 +67,9 @@ func (r *RSS) Search(ctx context.Context, q Query) ([]domain.SourcedDocument, er
 		limit = 30
 	}
 	needle := strings.ToLower(q.Topic)
+	// No upstream search here, so the quoted-phrase location AND (location.go)
+	// degrades to a second substring match over the same haystack.
+	locNeedle := strings.ToLower(strings.TrimSpace(q.Location))
 	var cutoff time.Time
 	if q.SinceSeconds > 0 {
 		cutoff = time.Now().Add(-time.Duration(q.SinceSeconds) * time.Second)
@@ -90,8 +93,11 @@ func (r *RSS) Search(ctx context.Context, q Query) ([]domain.SourcedDocument, er
 				if item == nil {
 					continue
 				}
-				combined := item.Title + " " + item.Description
-				if !strings.Contains(strings.ToLower(combined), needle) {
+				combined := strings.ToLower(item.Title + " " + item.Description)
+				if !strings.Contains(combined, needle) {
+					continue
+				}
+				if locNeedle != "" && !strings.Contains(combined, locNeedle) {
 					continue
 				}
 				if !cutoff.IsZero() && item.PublishedParsed != nil && item.PublishedParsed.Before(cutoff) {

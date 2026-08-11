@@ -14,7 +14,7 @@ import (
 //	type Query {
 //	  platforms: [Platform!]!
 //	  analyzeText(documents: [DocumentInput!]!, includeAspects: Boolean): TextAnalysis!
-//	  analyzeTopic(topic: String!, platforms: [String!], limitPerPlatform: Int, aspects: [String!], language: String, sinceSeconds: Int): TopicAnalysis!
+//	  analyzeTopic(topic: String!, platforms: [String!], limitPerPlatform: Int, aspects: [String!], language: String, sinceSeconds: Int, location: String): TopicAnalysis!
 //	}
 //
 // Since each call already runs through service.Service, the resolvers are
@@ -196,6 +196,9 @@ func (g *GraphQL) buildSchema() graphql.Schema {
 					"aspects":          &graphql.ArgumentConfig{Type: graphql.NewList(graphql.String)},
 					"language":         &graphql.ArgumentConfig{Type: graphql.String},
 					"sinceSeconds":     &graphql.ArgumentConfig{Type: graphql.Int},
+					// Best-effort keyword location filter; see
+					// connectors/location.go.
+					"location": &graphql.ArgumentConfig{Type: graphql.String},
 				},
 				Resolve: func(p graphql.ResolveParams) (any, error) {
 					req := service.AnalyzeTopicRequest{
@@ -205,6 +208,7 @@ func (g *GraphQL) buildSchema() graphql.Schema {
 						Aspects:          getStringListFromArgs(p.Args, "aspects"),
 						Language:         getStringFromArgs(p.Args, "language"),
 						SinceSeconds:     int64(getIntFromArgs(p.Args, "sinceSeconds")),
+						Location:         getStringFromArgs(p.Args, "location"),
 						// The GraphQL handler is wrapped by WithCredentials in
 						// main.go, so caller keys arrive on the context.
 						Creds: CredsFromContext(p.Context),

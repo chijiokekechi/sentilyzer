@@ -104,6 +104,11 @@ message AnalyzeTopicRequest {
   string language = 5;
   // Optional time window in seconds (0 = no limit).
   int64 since_seconds = 6;
+  // Optional best-effort location filter. This is KEYWORD matching, not
+  // geo-tagging: each keyword-search connector ANDs it into the platform
+  // query as a quoted phrase, and GDELT maps recognized country names/codes
+  // onto its sourcecountry: operator (see api/internal/connectors/location.go).
+  string location = 7;
 }
 
 // Warning records a platform that contributed nothing because it failed or

@@ -74,7 +74,7 @@ func (b *Bluesky) Search(ctx context.Context, q Query) ([]domain.SourcedDocument
 	}
 	u, _ := url.Parse(base + "/xrpc/app.bsky.feed.searchPosts")
 	v := u.Query()
-	v.Set("q", q.Topic)
+	v.Set("q", andLocation(q.Topic, q.Location))
 	v.Set("sort", "latest")
 	v.Set("limit", strconv.Itoa(limit))
 	if q.Language != "" {
