@@ -54,3 +54,6 @@ data/
 coverage.out
 htmlcov/
 .coverage
+
+# trained model artifacts fetched from Modal (reproducible via the pipeline)
+ml/student/
