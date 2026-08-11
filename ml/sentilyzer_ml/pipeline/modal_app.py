@@ -393,6 +393,11 @@ def train(run_id: str) -> dict:
             max_seconds=MAX_TRAIN_SECONDS - 600,  # leave room for export inside the cap
             max_sequences=MAX_TRAIN_SEQUENCES,
             batch_size=64,
+            # Measured (train:2026-08-11-033757): the default quarter of
+            # steps covered only 66% of the aspect pairs inside the budget
+            # and the aspect gate missed by 0.007; a third of steps buys
+            # ~88% coverage while the doc gate's margin absorbs the cut.
+            aspect_fraction=1 / 3,
             device="cuda",
         ),
         checkpoint_dir=run_dir / "ckpt",
