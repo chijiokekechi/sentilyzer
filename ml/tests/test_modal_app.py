@@ -32,6 +32,7 @@ def test_cli_surface():
     fn = m.main.info.raw_f
     assert list(inspect.signature(fn).parameters) == [
         "from_month", "to_month", "limit", "corpus", "output", "skip_ingest",
+        "fresh_corpus", "train_minutes", "aspect_pairs",
     ]
 
 
@@ -96,15 +97,92 @@ def test_holdout_pairs_floor():
 
 
 def test_label_aspects_stage_surface():
-    """The stage exists, takes only run_id, and the orchestrator runs it
-    after doc labeling with the same single timeout retry."""
+    """The stage exists, takes run_id plus the optional pair override, and
+    the orchestrator runs it after doc labeling with the same single timeout
+    retry."""
     fn = m.label_aspects_stage.info.raw_f
-    assert list(inspect.signature(fn).parameters) == ["run_id"]
+    assert list(inspect.signature(fn).parameters) == ["run_id", "max_pairs"]
     src = inspect.getsource(m.run_pipeline.info.raw_f)
     assert 'summary["label_aspects"]' in src
-    assert src.count("label_aspects_stage.remote(run_id)") == 2  # call + one retry
+    # call + one retry, both carrying the same override
+    assert src.count("label_aspects_stage.remote(run_id, aspect_pairs)") == 2
     assert src.index("label.remote") < src.index("label_aspects_stage.remote")
     assert src.index("label_aspects_stage.remote") < src.index("train.remote")
+
+
+def test_budget_ceiling_constants():
+    """The informed-consent overrides are bounded by hard ceilings, and the
+    defaults sit inside them so 0 (meaning "use the default") is always
+    legal."""
+    assert m.TRAIN_MINUTES_CEILING == 90
+    assert m.ASPECT_PAIRS_CEILING == 800_000
+    assert m.MAX_TRAIN_SECONDS <= m.TRAIN_MINUTES_CEILING * 60
+    assert m.ASPECT_PAIR_CAP <= m.ASPECT_PAIRS_CEILING
+
+
+def test_main_refuses_out_of_bounds_overrides():
+    """main() is the consent gate: one minute or one pair past the ceiling,
+    or any negative value, dies before a single remote call."""
+    fn = m.main.info.raw_f
+    with pytest.raises(SystemExit, match="--train-minutes 91"):
+        fn(train_minutes=m.TRAIN_MINUTES_CEILING + 1)
+    with pytest.raises(SystemExit, match="--aspect-pairs 800001"):
+        fn(aspect_pairs=m.ASPECT_PAIRS_CEILING + 1)
+    with pytest.raises(SystemExit, match="--train-minutes -1"):
+        fn(train_minutes=-1)
+    with pytest.raises(SystemExit, match="--aspect-pairs -1"):
+        fn(aspect_pairs=-1)
+    # The trainer reserves 600s of its budget for export, so a cap at or
+    # under 10 minutes would train for zero seconds.
+    with pytest.raises(SystemExit, match="export headroom"):
+        fn(train_minutes=10)
+
+
+def test_reset_corpus_surface():
+    """The fresh-corpus path: reset_corpus is an app function taking no
+    args, follows the reload/commit Volume protocol, deletes recursively,
+    and main wires it in before ingest (never unconditionally)."""
+    fn = m.reset_corpus.info.raw_f
+    assert list(inspect.signature(fn).parameters) == []
+    src = inspect.getsource(fn)
+    assert "volume.reload()" in src
+    assert "shutil.rmtree" in src
+    assert src.index("shutil.rmtree") < src.index("volume.commit()")
+    main_src = inspect.getsource(m.main.info.raw_f)
+    assert "if fresh_corpus:" in main_src
+    assert main_src.index("reset_corpus.remote") < main_src.index("ingest_hn.remote")
+
+
+def test_run_pipeline_accepts_opts():
+    """run_pipeline takes an optional opts dict (trigger's bare spawn still
+    works) and re-asserts the EFFECTIVE budgets against the ceilings on CPU,
+    before the lock and thus before any GPU spawn."""
+    fn = m.run_pipeline.info.raw_f
+    params = inspect.signature(fn).parameters
+    assert list(params) == ["opts"]
+    assert params["opts"].default is None
+    src = inspect.getsource(fn)
+    assert "TRAIN_MINUTES_CEILING" in src
+    assert "ASPECT_PAIRS_CEILING" in src
+    assert src.index("TRAIN_MINUTES_CEILING") < src.index("lock_decision")
+    assert src.index("ASPECT_PAIRS_CEILING") < src.index("lock_decision")
+    assert "train.remote(run_id, train_seconds)" in src
+    # main hands its knobs over as the opts dict
+    assert "run_pipeline.remote(opts)" in inspect.getsource(m.main.info.raw_f)
+
+
+def test_stage_overrides_fall_back_to_constants():
+    """Stages take their override with a None default and fall back to the
+    module constants, so direct invocations keep today's bounded budgets."""
+    train_fn = m.train.info.raw_f
+    train_params = inspect.signature(train_fn).parameters
+    assert list(train_params) == ["run_id", "max_seconds"]
+    assert train_params["max_seconds"].default is None
+    assert "max_seconds = MAX_TRAIN_SECONDS" in inspect.getsource(train_fn)
+
+    aspects_fn = m.label_aspects_stage.info.raw_f
+    assert inspect.signature(aspects_fn).parameters["max_pairs"].default is None
+    assert "max_pairs = ASPECT_PAIR_CAP" in inspect.getsource(aspects_fn)
 
 
 def test_train_and_eval_share_the_aspect_join():

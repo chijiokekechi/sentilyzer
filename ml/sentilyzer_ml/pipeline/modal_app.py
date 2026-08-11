@@ -32,6 +32,13 @@ Options:
                                 (uploaded to the Volume; harvester layout)
     --output DIR                where the trained model lands locally
     --skip-ingest               reuse whatever the Volume already holds
+    --fresh-corpus              wipe the Volume's corpus first; ingest then
+                                rebuilds every month (teacher labels survive,
+                                keyed per document, so the rerun stays cheap)
+    --train-minutes N           raise the 45-min training cap, hard ceiling
+                                TRAIN_MINUTES_CEILING (0 keeps the default)
+    --aspect-pairs N            raise the 400k aspect-pair cap, hard ceiling
+                                ASPECT_PAIRS_CEILING (0 keeps the default)
 
 Repeat runs are incremental: ingested months and teacher labels are reused,
 so a second run mostly pays for training (~$1). The run ends with sample
@@ -41,7 +48,10 @@ env var: SENTILYZER_ML_MODEL_DIR=./student (see README).
 COST GUARDS (all enforced in code): the trainer's wall clock is capped
 (MAX_TRAIN_SECONDS), the sequence cap is asserted on CPU before any GPU
 spawns, GPU functions run with retries=0, a run lock stops double-fires,
-and nothing has a schedule — an untriggered month costs $0.
+and nothing has a schedule — an untriggered month costs $0. The
+--train-minutes and --aspect-pairs overrides are informed-consent knobs:
+hard ceilings (TRAIN_MINUTES_CEILING, ASPECT_PAIRS_CEILING) are enforced in
+main() and re-asserted on CPU in run_pipeline before any GPU spawns.
 """
 
 from __future__ import annotations
@@ -66,6 +76,12 @@ TEACHER_MODEL = "cardiffnlp/twitter-roberta-base-sentiment-latest"
 ASPECT_TEACHER_MODEL = "yangheng/deberta-v3-base-absa-v1.1"
 ASPECT_PAIR_CAP = 400_000  # (text, aspect) pairs the labeler will ever score per run
 HOLDOUT_PAIRS = 2_000  # aspect-pair holdout ceiling (see holdout_pairs)
+# Informed-consent overrides (--train-minutes / --aspect-pairs) may raise the
+# training and pair budgets above, but never past these hard ceilings: main()
+# refuses larger values, and run_pipeline re-asserts the EFFECTIVE budgets on
+# CPU before any GPU spawns.
+TRAIN_MINUTES_CEILING = 90  # absolute wall-clock ceiling for --train-minutes
+ASPECT_PAIRS_CEILING = 800_000  # absolute pair ceiling for --aspect-pairs
 # ───────────────────────────────────────────────────────────────────────────
 
 def holdout_rows(n_labeled: int) -> int:
@@ -199,6 +215,10 @@ def ingest_hn(from_month: str, to_month: str = "", limit: int = 0) -> dict:
     zero-infrastructure data source. Incremental: done months are skipped."""
     from sentilyzer_ml.pipeline.hn_archive import ingest_months
 
+    # Sync before month_done() checks: a warm container's pre-reset snapshot
+    # would otherwise still see files reset_corpus just deleted and skip
+    # every month as already ingested.
+    volume.reload()
     total = ingest_months(
         Path(DATA) / "corpus",
         from_month,
@@ -208,6 +228,30 @@ def ingest_hn(from_month: str, to_month: str = "", limit: int = 0) -> dict:
     )
     volume.commit()
     return {"ingested": total}
+
+
+@app.function(image=cpu_image, volumes={DATA: volume}, timeout=600)
+def reset_corpus() -> dict:
+    """Wipe the Volume's corpus so the next ingest rebuilds it from zero.
+
+    Labels and runs are NOT touched: teacher labels are keyed by
+    (platform, doc_id, teacher_version) and remain valid for re-ingested
+    identical docs, which is what keeps a fresh-corpus run cheap.
+    """
+    import shutil
+
+    # Sync to the latest commit so we delete the corpus as it exists now,
+    # not a warm container's stale view of it.
+    volume.reload()
+    corpus = Path(DATA) / "corpus"
+    for name in ("documents", "tombstones"):
+        target = corpus / name
+        if target.is_dir():
+            # ignore_errors stays False: a half-deleted corpus must fail
+            # loudly, never masquerade as a clean slate. Absence is fine.
+            shutil.rmtree(target)
+    volume.commit()
+    return {"reset": True}
 
 
 @app.function(image=cpu_image, volumes={DATA: volume}, timeout=1800, memory=8192)
@@ -280,13 +324,24 @@ def label(run_id: str) -> dict:
     image=gpu_image, gpu="T4", volumes={DATA: volume},
     timeout=4 * 3600, retries=0, memory=4096,
 )
-def label_aspects_stage(run_id: str) -> dict:
+def label_aspects_stage(run_id: str, max_pairs: int | None = None) -> dict:
     import torch
 
     from sentilyzer_ml.inference import TransformerBackend
     from sentilyzer_ml.pipeline.label_aspects import label_aspect_pairs
 
+    # The ceiling binds every caller, including a direct ::label_aspects_stage
+    # invocation that bypassed main()'s consent gate.
+    if max_pairs is not None and not 0 < max_pairs <= ASPECT_PAIRS_CEILING:
+        raise RuntimeError(
+            f"max_pairs {max_pairs} outside (0, {ASPECT_PAIRS_CEILING}]"
+        )
+
     volume.reload()  # see prep's commit even from a warm/restarted container
+    # None means the default cap; anything else is an informed-consent
+    # override that run_pipeline already ceiling-checked on CPU.
+    if max_pairs is None:
+        max_pairs = ASPECT_PAIR_CAP
     if not torch.cuda.is_available():
         raise RuntimeError(
             "label_aspects_stage() reserved a T4 but torch sees no CUDA "
@@ -305,7 +360,7 @@ def label_aspects_stage(run_id: str) -> dict:
         batch_size=64,
         flush_every=25_000,
         checkpoint=volume.commit,
-        max_pairs=ASPECT_PAIR_CAP,
+        max_pairs=max_pairs,
     )
     volume.commit()
     return {"total": stats.total_pairs, "already": stats.already_labeled, "new": stats.newly_labeled}
@@ -313,14 +368,23 @@ def label_aspects_stage(run_id: str) -> dict:
 
 @app.function(
     image=gpu_image, gpu="A10", volumes={DATA: volume},
-    timeout=MAX_TRAIN_SECONDS + 300,  # headroom so OUR budget stops us, never Modal's
+    # Headroom over the CEILING, not the default: --train-minutes may legally
+    # run to 90 min, and OUR budget must still be what stops us, never Modal's.
+    timeout=TRAIN_MINUTES_CEILING * 60 + 300,
     retries=0, max_containers=1,
     memory=8192,  # the capped training set is held in RAM as Python strings
 )
-def train(run_id: str) -> dict:
+def train(run_id: str, max_seconds: int | None = None) -> dict:
     import duckdb
     import torch
     from transformers import AutoTokenizer
+
+    # Same ceiling discipline as label_aspects_stage: the Modal timeout above
+    # is sized for the ceiling, so the budget check must be too.
+    if max_seconds is not None and not 600 < max_seconds <= TRAIN_MINUTES_CEILING * 60:
+        raise RuntimeError(
+            f"max_seconds {max_seconds} outside (600, {TRAIN_MINUTES_CEILING * 60}]"
+        )
 
     from sentilyzer_ml.inference import _load_fp32
     from sentilyzer_ml.pipeline.export import export_student
@@ -328,6 +392,10 @@ def train(run_id: str) -> dict:
 
     volume.reload()  # field-proven necessary: a preemption reshuffle handed
     # this stage a container whose Volume view predated prep's commit
+    # None means the default budget; anything else is an informed-consent
+    # override that run_pipeline already ceiling-checked on CPU.
+    if max_seconds is None:
+        max_seconds = MAX_TRAIN_SECONDS
     run_dir = Path(DATA) / "runs" / run_id
     train_parquet = run_dir / "train.parquet"
     if not train_parquet.exists():
@@ -390,7 +458,7 @@ def train(run_id: str) -> dict:
         student, texts, probs, tokenize,
         DistillConfig(
             student_layers=STUDENT_LAYERS,
-            max_seconds=MAX_TRAIN_SECONDS - 600,  # leave room for export inside the cap
+            max_seconds=max_seconds - 600,  # leave room for export inside the cap
             max_sequences=MAX_TRAIN_SEQUENCES,
             batch_size=64,
             # Measured (train:2026-08-11-033757): the default quarter of
@@ -509,9 +577,24 @@ def evaluate(run_id: str) -> dict:
 
 
 @app.function(image=cpu_image, timeout=8 * 3600)
-def run_pipeline() -> dict:
+def run_pipeline(opts: dict | None = None) -> dict:
     """Orchestrates one run: lock → prep → label → label_aspects → train →
-    evaluate. Returns everything it decided."""
+    evaluate. Returns everything it decided. opts may carry informed-consent
+    budget overrides: {"train_seconds": int|None, "aspect_pairs": int|None}."""
+    opts = opts or {}
+    # Falsy overrides mean "use the default", normalized to None so the
+    # stages fall back to their module constants.
+    train_seconds = opts.get("train_seconds") or None
+    aspect_pairs = opts.get("aspect_pairs") or None
+    # The CPU-side assertion that bounds the GPU bill fires on the EFFECTIVE
+    # budgets (override or default): opts can arrive from any caller, so the
+    # hard ceilings are enforced here, before a single GPU container spawns.
+    assert 0 < (train_seconds or MAX_TRAIN_SECONDS) <= TRAIN_MINUTES_CEILING * 60, (
+        "train_seconds override breaches TRAIN_MINUTES_CEILING"
+    )
+    assert 0 < (aspect_pairs or ASPECT_PAIR_CAP) <= ASPECT_PAIRS_CEILING, (
+        "aspect_pairs override breaches ASPECT_PAIRS_CEILING"
+    )
     decision, arg = lock_decision(
         run_lock.get("run", None), time.time(), modal.current_input_id()
     )
@@ -570,11 +653,11 @@ def run_pipeline() -> dict:
         # Aspect labeling flushes the same way, so the same single retry
         # bounds its worst-case GPU bill too.
         try:
-            summary["label_aspects"] = label_aspects_stage.remote(run_id)
+            summary["label_aspects"] = label_aspects_stage.remote(run_id, aspect_pairs)
         except modal.exception.FunctionTimeoutError:
             print("label_aspects hit its timeout; retrying from flushed progress")
-            summary["label_aspects"] = label_aspects_stage.remote(run_id)
-        summary["train"] = train.remote(run_id)
+            summary["label_aspects"] = label_aspects_stage.remote(run_id, aspect_pairs)
+        summary["train"] = train.remote(run_id, train_seconds)
         summary["eval"] = evaluate.remote(run_id)
         return summary
     finally:
@@ -672,8 +755,37 @@ def main(
     corpus: str = "",
     output: str = "./student",
     skip_ingest: bool = False,
+    fresh_corpus: bool = False,
+    train_minutes: int = 0,
+    aspect_pairs: int = 0,
 ):
     """The clone-and-run flow. See the module docstring for examples."""
+    # Budget overrides are informed consent, not a blank check: refuse
+    # anything negative or past the hard ceilings before touching Modal.
+    if not 0 <= train_minutes <= TRAIN_MINUTES_CEILING:
+        raise SystemExit(
+            f"--train-minutes {train_minutes}: must be between 0 and "
+            f"{TRAIN_MINUTES_CEILING} (0 keeps the default "
+            f"{MAX_TRAIN_SECONDS // 60}-minute cap)"
+        )
+    if train_minutes and train_minutes * 60 <= 600:
+        raise SystemExit(
+            f"--train-minutes {train_minutes}: the last 600 seconds of the "
+            "budget are export headroom, so the override must be at least 11"
+        )
+    if not 0 <= aspect_pairs <= ASPECT_PAIRS_CEILING:
+        raise SystemExit(
+            f"--aspect-pairs {aspect_pairs}: must be between 0 and "
+            f"{ASPECT_PAIRS_CEILING:,} (0 keeps the default "
+            f"{ASPECT_PAIR_CAP:,}-pair cap)"
+        )
+    if fresh_corpus and (skip_ingest or corpus):
+        # Silently ignoring the reset would leave the user believing the
+        # Volume was rebuilt; contradictory flags fail loudly instead.
+        raise SystemExit(
+            "--fresh-corpus resets the Volume and re-ingests, which "
+            "contradicts --skip-ingest and --corpus; drop one of them"
+        )
     if corpus:
         src = Path(corpus)
         if not src.is_dir():
@@ -682,10 +794,19 @@ def main(
         with volume.batch_upload(force=True) as batch:
             batch.put_directory(str(src), "/corpus")
     elif not skip_ingest:
+        if fresh_corpus:
+            reset_corpus.remote()
+            print("corpus reset: ingest will rebuild every month "
+                  "(about 45 minutes for the default window)")
         print(f"ingesting HN archive {from_month}..{to_month or 'latest full month'} …")
         print(json.dumps(ingest_hn.remote(from_month, to_month, limit)))
 
-    summary = run_pipeline.remote()
+    # 0 means "no override": None lets the stage constants stay in charge.
+    opts = {
+        "train_seconds": train_minutes * 60 if train_minutes else None,
+        "aspect_pairs": aspect_pairs if aspect_pairs else None,
+    }
+    summary = run_pipeline.remote(opts)
     print(json.dumps(summary, indent=2))
     if "skipped" in summary:
         return
