@@ -55,16 +55,27 @@ func (r *REST) Router() http.Handler {
 	rt.Get("/livez", handleLivez)
 	rt.Get("/readyz", r.handleReadyz)
 
-	rt.Group(func(gr chi.Router) {
-		gr.Use(middleware.Timeout(requestTimeout))
-		gr.Use(noStore)
-		gr.Use(negotiateMedia)
-		for _, mw := range rateLimiters(r.RateLimit) {
-			gr.Use(mw)
-		}
-
+	// Built once so both route groups below share the same buckets; calling
+	// rateLimiters per group would hand each group a budget of its own.
+	limiters := rateLimiters(r.RateLimit)
+	api := func(offers []string, register func(chi.Router)) {
+		rt.Group(func(gr chi.Router) {
+			gr.Use(middleware.Timeout(requestTimeout))
+			gr.Use(noStore)
+			gr.Use(negotiateMedia(offers))
+			for _, mw := range limiters {
+				gr.Use(mw)
+			}
+			register(gr)
+		})
+	}
+	api(offers, func(gr chi.Router) {
 		gr.Get("/health", r.handleHealth)
 		gr.Get("/v1/platforms", r.handleListPlatforms)
+	})
+	// The analyze endpoints additionally offer the row-per-document export
+	// formats (CSV, NDJSON); see export.go.
+	api(analyzeOffers, func(gr chi.Router) {
 		gr.Post("/v1/analyze/text", r.handleAnalyzeText)
 		gr.Post("/v1/analyze/topic", r.handleAnalyzeTopic)
 		// GET form for quick smoke-testing, e.g.
@@ -143,11 +154,18 @@ func (r *REST) handleAnalyzeText(w http.ResponseWriter, req *http.Request) {
 		writeError(w, req, err)
 		return
 	}
-	writePayload(w, req, http.StatusOK, struct {
-		XMLName   xml.Name                `json:"-" xml:"analyze_text_response"`
-		Results   []domain.DocumentResult `json:"results" xml:"results>result"`
-		Aggregate domain.Aggregate        `json:"aggregate" xml:"aggregate"`
-	}{Results: resp.Results, Aggregate: resp.Aggregate})
+	switch formatFrom(req.Context()) {
+	case mimeCSV:
+		writeTextCSV(w, resp.Results)
+	case mimeNDJSON:
+		writeTextNDJSON(w, resp.Results)
+	default:
+		writePayload(w, req, http.StatusOK, struct {
+			XMLName   xml.Name                `json:"-" xml:"analyze_text_response"`
+			Results   []domain.DocumentResult `json:"results" xml:"results>result"`
+			Aggregate domain.Aggregate        `json:"aggregate" xml:"aggregate"`
+		}{Results: resp.Results, Aggregate: resp.Aggregate})
+	}
 }
 
 type analyzeTopicDTO struct {
@@ -212,7 +230,14 @@ func (r *REST) runTopic(w http.ResponseWriter, req *http.Request, body analyzeTo
 		writeError(w, req, err)
 		return
 	}
-	writePayload(w, req, http.StatusOK, asTopicEnvelope(resp))
+	switch formatFrom(req.Context()) {
+	case mimeCSV:
+		writeTopicCSV(w, resp)
+	case mimeNDJSON:
+		writeTopicNDJSON(w, resp)
+	default:
+		writePayload(w, req, http.StatusOK, asTopicEnvelope(resp))
+	}
 }
 
 // asTopicEnvelope wraps the analysis in a struct that XML-encodes cleanly
@@ -307,6 +332,14 @@ func writePayload(w http.ResponseWriter, req *http.Request, status int, payload 
 }
 
 func writePayloadAs(w http.ResponseWriter, format string, status int, payload any) {
+	// Successful CSV responses are written by export.go, never through here, so
+	// a CSV-negotiated payload on this path is an error body. CSV has no shape
+	// for one (a bare header row would read as an empty result set), so CSV
+	// clients get their errors as JSON. NDJSON needs no such downgrade: an
+	// error object on a single line is valid NDJSON.
+	if format == mimeCSV {
+		format = mimeJSON
+	}
 	w.Header().Set("Content-Type", contentType(format))
 	w.WriteHeader(status)
 	switch format {
@@ -321,6 +354,9 @@ func writePayloadAs(w http.ResponseWriter, format string, status int, payload an
 		if b, err := yaml.Marshal(payload); err == nil {
 			_, _ = w.Write(b)
 		}
+	case mimeNDJSON:
+		// Error bodies only; one compact object on one line.
+		_ = json.NewEncoder(w).Encode(payload)
 	default:
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")

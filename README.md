@@ -157,6 +157,28 @@ Every REST endpoint content-negotiates JSON, XML, and YAML via `Accept`
 (q-values honored) or `?format=json|xml|yaml`. JSON is the default and wins
 ties. An `Accept` we can't satisfy gets a `406`.
 
+The analyze endpoints (`/v1/analyze/text` and `/v1/analyze/topic`, POST and
+GET) additionally offer two row-per-document exports, responses only: CSV
+(`Accept: text/csv` or `?format=csv`) and NDJSON (`Accept:
+application/x-ndjson` or `?format=ndjson`). On every other endpoint these
+types still negotiate to `406`.
+
+**CSV is lossy** the way XML is (see below): aggregates, aspects, and
+`metadata` are omitted. The header row is always present, quoting/escaping is
+RFC 4180, and the columns are:
+
+- `/v1/analyze/text`: `index,label,confidence,polarity,p_negative,p_neutral,p_positive`
+  (`index` is the document's position in the request)
+- `/v1/analyze/topic`: `platform,doc_id,created_at,label,confidence,polarity,p_negative,p_neutral,p_positive,text`
+  (`created_at` is the platform's post timestamp, RFC 3339 UTC, blank when unknown)
+
+Errors on a CSV request come back as JSON: CSV has no error shape, and a bare
+header row would read as an empty result set.
+
+**NDJSON** carries the same document objects the JSON response does, one per
+line. For `/v1/analyze/topic` a final `{"aggregate": ...}` line closes the
+stream; the breakdowns (`by_platform`, `by_aspect`) and warnings are omitted.
+
 **Requests** are JSON or XML only. YAML request bodies are refused with `415`,
 deliberately: YAML 1.1 implicit typing silently coerces unquoted scalars, so
 `topic: no` parses as the *string* `"false"` with no error. That is unguardable

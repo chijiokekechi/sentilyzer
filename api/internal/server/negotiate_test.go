@@ -60,10 +60,89 @@ func TestNegotiate(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := negotiate(tc.accept); got != tc.want {
+			if got := negotiate(tc.accept, offers); got != tc.want {
 				t.Errorf("negotiate(%q) = %q, want %q", tc.accept, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestNegotiateAnalyzeOffers(t *testing.T) {
+	cases := []struct {
+		name   string
+		accept string
+		want   string
+	}{
+		{"exact csv", "text/csv", mimeCSV},
+		{"exact ndjson", "application/x-ndjson", mimeNDJSON},
+		{"csv alias", "application/csv", mimeCSV},
+		{"ndjson alias", "application/ndjson", mimeNDJSON},
+		{"q ranks csv over json", "text/csv;q=0.9, application/json;q=0.1", mimeCSV},
+		{"q ranks ndjson over json", "application/x-ndjson, application/json;q=0.5", mimeNDJSON},
+
+		// JSON stays the tie-winner: it precedes the export formats in offers.
+		{"csv tie goes to json", "text/csv, application/json", mimeJSON},
+		{"ndjson tie goes to json", "application/x-ndjson, application/json", mimeJSON},
+		{"wildcard still prefers json", "*/*", mimeJSON},
+
+		// A browser's stock header must not start yielding CSV either.
+		{
+			"firefox still gets json",
+			"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+			mimeJSON,
+		},
+
+		// text/* is a data client asking for the text offer, NOT a browser:
+		// only a literal text/html trips the browser sniff. Returning JSON
+		// here would hand the client a type it never accepted.
+		{"text wildcard reaches csv", "text/*", mimeCSV},
+		{"text wildcard beats lower-q json", "text/*, application/json;q=0.5", mimeCSV},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := negotiate(tc.accept, analyzeOffers); got != tc.want {
+				t.Errorf("negotiate(%q) = %q, want %q", tc.accept, got, tc.want)
+			}
+		})
+	}
+
+	// The base offers must not have grown export formats by accident: on every
+	// non-analyze endpoint these stay 406.
+	for _, accept := range []string{"text/csv", "application/x-ndjson"} {
+		if got := negotiate(accept, offers); got != "" {
+			t.Errorf("negotiate(%q, offers) = %q, want unsatisfiable", accept, got)
+		}
+	}
+}
+
+func TestFormatParam(t *testing.T) {
+	cases := []struct {
+		v      string
+		offers []string
+		want   string
+	}{
+		{"json", offers, mimeJSON},
+		{"YAML", offers, mimeYAML},
+		{"yml", offers, mimeYAML},
+		{"csv", analyzeOffers, mimeCSV},
+		{"ndjson", analyzeOffers, mimeNDJSON},
+		// Known name, but not offered on this route.
+		{"csv", offers, ""},
+		{"ndjson", offers, ""},
+		{"toml", analyzeOffers, ""},
+	}
+	for _, tc := range cases {
+		if got := formatParam(tc.v, tc.offers); got != tc.want {
+			t.Errorf("formatParam(%q, %v) = %q, want %q", tc.v, tc.offers, got, tc.want)
+		}
+	}
+
+	// The 400 message lists each route's formats once, canonical names only.
+	if got, want := formatParamList(offers), "json, xml, or yaml"; got != want {
+		t.Errorf("formatParamList(offers) = %q, want %q", got, want)
+	}
+	if got, want := formatParamList(analyzeOffers), "json, xml, yaml, csv, or ndjson"; got != want {
+		t.Errorf("formatParamList(analyzeOffers) = %q, want %q", got, want)
 	}
 }
 
@@ -83,16 +162,20 @@ func TestQualitySpecificityWins(t *testing.T) {
 
 func TestCanonicalMedia(t *testing.T) {
 	for in, want := range map[string]string{
-		"application/json":   mimeJSON,
-		"APPLICATION/JSON":   mimeJSON,
-		"  text/json  ":      mimeJSON,
-		"application/xml":    mimeXML,
-		"text/xml":           mimeXML,
-		"application/yaml":   mimeYAML,
-		"application/x-yaml": mimeYAML,
-		"text/x-yaml":        mimeYAML,
-		"text/plain":         "",
-		"":                   "",
+		"application/json":     mimeJSON,
+		"APPLICATION/JSON":     mimeJSON,
+		"  text/json  ":        mimeJSON,
+		"application/xml":      mimeXML,
+		"text/xml":             mimeXML,
+		"application/yaml":     mimeYAML,
+		"application/x-yaml":   mimeYAML,
+		"text/x-yaml":          mimeYAML,
+		"text/csv":             mimeCSV,
+		"application/csv":      mimeCSV,
+		"application/x-ndjson": mimeNDJSON,
+		"application/ndjson":   mimeNDJSON,
+		"text/plain":           "",
+		"":                     "",
 	} {
 		if got := canonicalMedia(in); got != want {
 			t.Errorf("canonicalMedia(%q) = %q, want %q", in, got, want)

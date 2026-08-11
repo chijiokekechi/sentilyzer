@@ -157,6 +157,38 @@ func TestRateLimit_DoesNotApplyToLivez(t *testing.T) {
 	}
 }
 
+func TestRateLimit_SharedAcrossRouteGroups(t *testing.T) {
+	// The router registers the base and analyze endpoints in separate groups
+	// (they offer different response formats), but the budget is one per
+	// instance, not one per group.
+	rest := &server.REST{
+		Service:   newTestService(t),
+		Version:   "test",
+		RateLimit: server.RateLimitConfig{PerIPPerMinute: 2},
+	}
+	srv := httptest.NewServer(rest.Router())
+	defer srv.Close()
+
+	for _, path := range []string{"/health", "/v1/platforms"} {
+		resp, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s = %d, want 200 within budget", path, resp.StatusCode)
+		}
+	}
+	resp, err := http.Get(srv.URL + "/v1/analyze/topic?topic=hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("analyze after exhausting the budget elsewhere = %d, want 429", resp.StatusCode)
+	}
+}
+
 func TestRateLimit_DisabledWhenZero(t *testing.T) {
 	rest := &server.REST{
 		Service:   newTestService(t),
