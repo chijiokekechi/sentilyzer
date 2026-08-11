@@ -1,9 +1,9 @@
 # Sentilyzer
 
 A sentiment-analysis API that serves the same business logic over **REST/JSON,
-REST/XML, REST/YAML, gRPC, and GraphQL**, and pulls source material from public platforms
-(Hacker News, Reddit, RSS, StockTwits, Mastodon, Twitter/X, YouTube — drop-in
-pluggable).
+REST/XML, REST/YAML, gRPC, and GraphQL**, and pulls source material from public
+platforms (Hacker News, Reddit, RSS, StockTwits, Mastodon, Twitter/X, YouTube;
+all drop-in pluggable).
 
 ```
                   ┌──────────────────────────────────────────────┐
@@ -31,21 +31,21 @@ pluggable).
 
 ## Why these choices
 
-- **Go for the gateway** — one process serves four protocol surfaces, fans out
+- **Go for the gateway**: one process serves four protocol surfaces, fans out
   cleanly to many connectors via goroutines, and gives a static binary for
   trivial deployment.
-- **Python for ML** — first-class HuggingFace + PyTorch ecosystem with the
+- **Python for ML**: first-class HuggingFace + PyTorch ecosystem with the
   best research-to-production paved path. Talks to Go over gRPC so each side
   scales (and crashes) independently.
 - **`cardiffnlp/twitter-roberta-base-sentiment-latest`** for the
-  document-level model — RoBERTa-base fine-tuned on ~124M tweets, 3-class
+  document-level model: RoBERTa-base fine-tuned on ~124M tweets, 3-class
   (negative/neutral/positive). Best published F1 we've found on consumer/
-  social text, ~50–100ms CPU inference per item, batchable.
-- **`yangheng/deberta-v3-base-absa-v1.1`** for aspect-based sentiment —
+  social text, ~50-100ms CPU inference per item, batchable.
+- **`yangheng/deberta-v3-base-absa-v1.1`** for aspect-based sentiment:
   DeBERTa-v3 fine-tuned on SemEval ABSA datasets so callers can get sentiment
   *about* a specific aspect (e.g. "the airline's food", "Robinhood's UI"),
   not just the whole post.
-- **Heuristic stub backend** for offline / CI / quick demos — toggle with
+- **Heuristic stub backend** for offline / CI / quick demos: toggle with
   `SENTILYZER_ML_USE_STUB=1` and the worker uses a deterministic lexicon
   instead of pulling weights.
 
@@ -72,7 +72,7 @@ curl -s -X POST http://localhost:8080/v1/analyze/text \
      -H 'Content-Type: application/xml' -H 'Accept: application/xml' \
      -d '<analyze_text><documents><document><text>terrible service</text></document></documents></analyze_text>'
 
-# YAML out (?format=yaml works too). Requests stay JSON or XML — see below.
+# YAML out (?format=yaml works too). Requests stay JSON or XML; see below.
 curl -s -X POST http://localhost:8080/v1/analyze/text \
      -H 'Content-Type: application/json' -H 'Accept: application/yaml' \
      -d '{"documents":[{"text":"loved it"}]}'
@@ -114,7 +114,7 @@ disabled with a reason; calls that ask for it are silently skipped.
 ### Bring your own key
 
 YouTube and Mastodon can also run on a **caller-supplied** key for a single
-request — no server configuration needed. Send the key as a header (REST /
+request, with no server configuration needed. Send the key as a header (REST /
 GraphQL) or as gRPC metadata (same names, lowercased):
 
 | Header                              | Unlocks    |
@@ -148,7 +148,7 @@ Both platforms remain available via server-side configuration.
 Their APIs either don't exist for third parties (Quora, Blind) or have
 ToS-incompatible scraping requirements (Facebook public posts are gated).
 The framework leaves the slot open: implementing `Connector` for a new
-platform is a single file — see `internal/connectors/hackernews.go` for
+platform is a single file; see `internal/connectors/hackernews.go` for
 the smallest reference.
 
 ## Response formats
@@ -180,6 +180,28 @@ POST /graphql                     → GraphQL
 gRPC sentilyzer.v1.SentilyzerService → mirror of the above
 ```
 
+### Filtering by topic, and saving what you get
+
+Topic filtering is the core of `/v1/analyze/topic`: the topic string is
+searched on each requested platform, and every matching document is scored.
+Multi-word topics work ("virtual educational tools", "iPhone battery
+complaints"). Precision is bounded by each platform's own search: a query
+like "barbershops in Austin" matches posts containing those words, not
+businesses located there; the API has no entity or geo layer.
+
+The API deliberately keeps no server-side state, so persisting results is
+the caller's job, and it is a one-liner:
+
+```bash
+curl -s "localhost:8080/v1/analyze/topic?topic=virtual+educational+tools" \
+     > edtech-$(date +%F).json
+```
+
+Pipe into your own database, or request `Accept: application/yaml` if that
+suits your tooling better. Retention of platform content then happens under
+your control and your responsibility, which is where the platforms' terms
+put it anyway.
+
 ## Configuration
 
 Every variable is optional; see `.env.example` for the full list.
@@ -194,14 +216,14 @@ Key knobs:
 | `SENTILYZER_ML_USE_STUB`     | `0`                                  | Skip HuggingFace, use heuristic        |
 | `SENTILYZER_ML_GENERAL_MODEL`| `cardiffnlp/twitter-roberta-base-…`  | Override the document-level model      |
 | `SENTILYZER_ML_ASPECT_MODEL` | `yangheng/deberta-v3-base-absa-v1.1` | Override the aspect model              |
-| `SENTILYZER_ML_MAX_BATCH`    | `32`                                 | Batch ceiling — **set it on both processes or neither** |
+| `SENTILYZER_ML_MAX_BATCH`    | `32`                                 | Batch ceiling. **Set it on both processes or neither** |
 | `SENTILYZER_CACHE_TTL`       | `10m`                                | LRU TTL for topic queries              |
 
 ## Train your own student (on your Modal account)
 
 The distillation pipeline runs entirely on **your** [Modal](https://modal.com)
-account — no servers, no storage accounts, no keys handed to anyone. Modal's
-recurring free credit covers it (a full run costs ~$1–2 of credit; an idle
+account: no servers, no storage accounts, no keys handed to anyone. Modal's
+recurring free credit covers it (a full run costs ~$1-2 of credit; an idle
 month costs $0):
 
 ```bash
@@ -213,13 +235,13 @@ modal run --detach sentilyzer_ml/pipeline/modal_app.py::main \
 
 `--detach` keeps the run alive on Modal even if your connection drops
 mid-training (without it, the app's lifetime is tied to your laptop's
-heartbeats). If you do get disconnected, the pipeline finishes anyway —
+heartbeats). If you do get disconnected, the pipeline finishes anyway;
 pick the artifact up afterwards:
 
 ```bash
 modal run sentilyzer_ml/pipeline/modal_app.py::runs      # list finished runs
 modal run sentilyzer_ml/pipeline/modal_app.py::fetch \
-    --run-id "train-XXXXXXXX" --output ./student
+    --run-id "train:2026-08-10-221206" --output ./student
 modal run sentilyzer_ml/pipeline/modal_app.py::unlock    # if a dead run stranded the lock
 ```
 
@@ -232,16 +254,19 @@ per-class-collapse floors), and downloads `model.int8.onnx` + tokenizer +
 | Flag | Meaning |
 |------|---------|
 | `--from-month` / `--to-month` | archive window to ingest (YYYY-MM) |
-| `--limit N`      | per-month row cap — cheap smoke runs |
+| `--limit N`      | per-month row cap for cheap smoke runs |
 | `--corpus DIR`   | train on your own harvested corpus instead of the archive |
 | `--skip-ingest`  | reuse whatever the Volume already holds |
 
 Repeat runs are incremental (ingested months and teacher labels are reused),
 and training is bounded by wall clock, so the bill stays ~$1/run no matter
 how big the corpus grows. The run ends with sample predictions from your
-fresh student.
+fresh student. The pipeline survives disconnects, function timeouts, and
+Modal preemptions: labels flush to the Volume every 50k rows, training
+checkpoints with RNG state, and a preempted orchestrator resumes its own
+run instead of restarting it.
 
-**Serve it on demand** — start the API when you need it, stop it when you
+**Serve it on demand**: start the API when you need it, stop it when you
 don't; nothing runs in between:
 
 ```bash
@@ -253,7 +278,7 @@ curl "localhost:8080/v1/analyze/topic?topic=rust&limit_per_platform=5" | jq
 
 If 8080/9090 are taken on your machine (Prometheus famously squats 9090),
 pick free ports: `SENTILYZER_HTTP_ADDR=":8098" SENTILYZER_GRPC_ADDR=":9091"
-make api-run` — then curl port 8098.
+make api-run`, then curl port 8098.
 
 Document-level sentiment comes from your student; aspect analysis keeps the
 teacher (the student's aspect head is untrained until aspect labels exist).
@@ -279,4 +304,4 @@ docs/architecture.md   # design notes
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

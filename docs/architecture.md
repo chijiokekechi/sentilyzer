@@ -18,8 +18,8 @@ restarts, and is monitored independently.
 ## Why the four protocols share one `Service`
 
 The `service.Service` type is the protocol-agnostic core (in
-`api/internal/service/service.go`). Each transport — `server/rest.go`,
-`server/grpc.go`, `server/graphql.go` — is a thin adapter that converts
+`api/internal/service/service.go`). Each transport (`server/rest.go`,
+`server/grpc.go`, `server/graphql.go`) is a thin adapter that converts
 the inbound request shape to a `service.Analyze*` call and converts the
 domain result back. Adding a fifth transport (e.g. WebSocket streaming,
 SOAP) means a new adapter file; nothing else changes.
@@ -27,7 +27,7 @@ SOAP) means a new adapter file; nothing else changes.
 JSON, XML, and YAML share the **same** REST router; HTTP content
 negotiation (Accept with q-values / `?format=`) flips the encoder.
 YAML marshals through `sigs.k8s.io/yaml`, which routes via `encoding/json`
-and so honors the same `json:` struct tags — YAML and JSON responses are
+and so honors the same `json:` struct tags. YAML and JSON responses are
 identical in shape by construction, with no `yaml:` tags to drift.
 YAML is **output only**; see `server/rest.go:decodeRequest` for why.
 
@@ -36,9 +36,9 @@ YAML is **output only**; see `server/rest.go:decodeRequest` for why.
 - **Trained on the right domain.** ~124M tweets, so consumer/social
   vocabulary, slang, hashtags, and brand mentions are first-class
   rather than out-of-distribution.
-- **Three classes** — negative / neutral / positive — with calibrated
+- **Three classes** (negative / neutral / positive) with calibrated
   softmax outputs we can convert to a continuous polarity (`pos − neg`).
-- **Speed.** ~50–100ms per item on CPU at batch=16, ~10ms on GPU.
+- **Speed.** ~50-100ms per item on CPU at batch=16, ~10ms on GPU.
   Batching across platforms in `service.AnalyzeTopic` keeps tail latency
   down even when fanning out across N connectors.
 - **MIT-licensed** model card; no commercial-use ambiguity.
@@ -47,7 +47,7 @@ Alternatives we considered:
 
 | Model                                          | Why we didn't pick it (yet)                                  |
 |------------------------------------------------|--------------------------------------------------------------|
-| DistilBERT-SST2                                | Faster, but trained on movie reviews — shifts on social text.|
+| DistilBERT-SST2                                | Faster, but trained on movie reviews (shifts on social text).|
 | `cardiffnlp/twitter-xlm-roberta-base-sentiment`| 8 languages, but ~25 % bigger; planned as a `--multilingual` knob. |
 | Llama-3-8B with sentiment prompt               | Far higher cost/latency; quality gain marginal for 3-class.  |
 | Pure VADER lexicon                             | Fast, but brittle on sarcasm and modern slang.               |
@@ -100,7 +100,7 @@ operator *why* (missing API key, instance unset, etc.).
 
 - **In-process LRU TTL cache** on `service.Service` keys topic-analysis
   results by `(topic, platforms, limit, language, since, aspects)`. TTL
-  defaults to 10 min — long enough to absorb the burst of duplicate
+  defaults to 10 min: long enough to absorb the burst of duplicate
   queries that follows a retry-storm, short enough that a freshly
   trending topic still produces fresh results.
 - **No durable per-document storage.** An earlier SQLite store wrote one row
@@ -120,7 +120,7 @@ operator *why* (missing API key, instance unset, etc.).
 | ML worker unreachable         | `/health` reports `ml_reachable=false`; analyses return `502` |
 | Single connector errors/times out | Dropped after 3s; others still returned. Response is `partial: true` with a `warnings[]` entry naming it. Partial results are **not** cached |
 | All connectors error          | `AnalyzeTopic` returns `502 Bad Gateway` with the error list |
-| No connector enabled at all   | `503 Service Unavailable` — a misconfiguration, not a bad request |
+| No connector enabled at all   | `503 Service Unavailable`: a misconfiguration, not a bad request |
 | Request exceeds 15s           | `504 Gateway Timeout` (`middleware.Timeout`)                |
 | Malformed request             | `400 Bad Request`                                            |
 | YAML request body            | `415 Unsupported Media Type`                                 |
@@ -130,7 +130,7 @@ operator *why* (missing API key, instance unset, etc.).
 ## Roadmap
 
 - Streaming `AnalyzeTopic` results via gRPC server-stream / GraphQL
-  subscriptions — stream documents as platforms finish, instead of
+  subscriptions: stream documents as platforms finish, instead of
   waiting on the slowest one.
 - ONNX-quantized export of the general model to halve CPU latency.
 - Per-platform rate limiting (token bucket) and circuit breakers.
