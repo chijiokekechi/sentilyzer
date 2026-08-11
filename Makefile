@@ -15,7 +15,7 @@ PROTO_FILES := $(shell find proto -name '*.proto')
 
 .PHONY: help
 help: ## Show this help.
-	@awk 'BEGIN{FS=":.*##"; printf "Targets:\n"} /^[a-zA-Z_-]+:.*##/ {printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN{FS=":.*##"; printf "Targets:\n"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 .PHONY: tools
 tools: ## Install Go protoc plugins.
@@ -69,6 +69,11 @@ ml-test: ## Run Python tests.
 
 .PHONY: test
 test: api-test ml-test ## Run the full test suite.
+
+.PHONY: e2e
+e2e: ## Smoke-test the whole stack locally (stub ML + mock connector, localhost only).
+	@echo "e2e: estimated runtime ~1 minute (no Modal, no GPU, no network beyond localhost)"
+	bash scripts/e2e.sh
 
 .PHONY: docker
 docker: ## Build container images for both services.
