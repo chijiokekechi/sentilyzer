@@ -5,12 +5,12 @@ import time
 
 import grpc
 import pytest
-
-from sentilyzer_ml import config as cfg
-from sentilyzer_ml import server as srv
 from sentilyzer.v1 import inference_pb2 as ipb
 from sentilyzer.v1 import inference_pb2_grpc as igrpc
 from sentilyzer.v1 import sentilyzer_pb2 as spb
+
+from sentilyzer_ml import config as cfg
+from sentilyzer_ml import server as srv
 
 
 @pytest.fixture()
@@ -28,6 +28,7 @@ def grpc_server():
     # Build the server manually (without serve()) so we can capture the
     # ephemeral port.
     from concurrent import futures
+
     import grpc as _grpc
 
     backend = srv.inf.make_backend(
