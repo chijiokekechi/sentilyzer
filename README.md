@@ -364,6 +364,9 @@ What each takes, so you can pick the right check for the moment:
 `make e2e` needs no network beyond localhost, no GPU, and no Modal account;
 it is the check to run before any commit that touches serving.
 
+Every command for training, harvesting, serving, querying, and Modal
+operations lives in one reference: [docs/commands.md](docs/commands.md).
+
 ## Project layout
 
 ```
